@@ -42,12 +42,23 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _chatLog = MutableStateFlow<List<String>>(emptyList())
     val chatLog: StateFlow<List<String>> = _chatLog.asStateFlow()
+    private val _aiName = MutableStateFlow("Tiểu Trí")
+    val aiName = _aiName.asStateFlow()
     private val _voiceType = MutableStateFlow("Dễ thương")
     val voiceType = _voiceType.asStateFlow()
     private val _personalityType = MutableStateFlow("Gần gũi")
     val personalityType = _personalityType.asStateFlow()
     private val _customPrompt = MutableStateFlow("")
     val customPrompt = _customPrompt.asStateFlow()
+    private val _isWakeWordMode = MutableStateFlow(false)
+    val isWakeWordMode = _isWakeWordMode.asStateFlow()
+    private val _isHandsFreeMode = MutableStateFlow(false)
+    val isHandsFreeMode = _isHandsFreeMode.asStateFlow()
+    
+    private val _partialSpeechText = MutableStateFlow("")
+    val partialSpeechText = _partialSpeechText.asStateFlow()
+
+    private var isWaitingForCommand = false
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
@@ -87,20 +98,64 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                 override fun onError(error: Int) {
                     _isListening.value = false
                     Log.e("Speech", "Error: $error")
+                    // If in wake word mode and no manual command is being waited for, restart after silence
+                    if (_isWakeWordMode.value && !isWaitingForCommand) {
+                        if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_CLIENT) {
+                            startContinuousListening()
+                        }
+                    } else if (isWaitingForCommand) {
+                        isWaitingForCommand = false
+                        if (_isWakeWordMode.value) {
+                            startContinuousListening()
+                        }
+                    }
                 }
                 override fun onResults(results: Bundle?) {
                     _isListening.value = false
+                    _partialSpeechText.value = ""
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     if (!matches.isNullOrEmpty()) {
                         val text = matches[0]
                         addLog("Bạn: $text")
-                        processUserInput(text)
+                        
+                        if (_isWakeWordMode.value && !isWaitingForCommand) {
+                            val triggerName = _aiName.value.lowercase()
+                            if (text.lowercase().contains(triggerName)) {
+                                isWaitingForCommand = true
+                                speak("Dạ, em nghe đây")
+                            } else {
+                                // Name not detected, restart listening implicitly
+                                startContinuousListening()
+                            }
+                        } else {
+                            // Normal manual fetch or already waiting for command
+                            isWaitingForCommand = false
+                            processUserInput(text)
+                            
+                            // Restart wake word loop after processing if mode is on (this will be called in speak completion)
+                        }
+                    } else {
+                        // Empty match
+                        isWaitingForCommand = false
+                        if (_isWakeWordMode.value) {
+                            startContinuousListening()
+                        }
                     }
                 }
-                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        _partialSpeechText.value = matches[0]
+                    }
+                }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
         }
+    }
+
+    fun startContinuousListening() {
+        if (!_isWakeWordMode.value || isWaitingForCommand) return
+        startListening()
     }
 
     fun startListening() {
@@ -108,12 +163,14 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
             tts?.stop()
             _isSpeaking.value = false
         }
+        _partialSpeechText.value = ""
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             // Giảm độ trễ chờ im lặng để nhận diện nhanh hơn
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
         }
         _isListening.value = true
         _emotion.value = PetEmotion.LISTENING
@@ -123,6 +180,7 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     fun stopListening() {
         speechRecognizer?.stopListening()
         _isListening.value = false
+        isWaitingForCommand = false
     }
 
     fun pet() {
@@ -147,10 +205,20 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun updateSettings(voice: String, personality: String, custom: String) {
+    fun updateSettings(name: String, voice: String, personality: String, custom: String, wakeWordMode: Boolean = false, handsFreeMode: Boolean = false) {
+        _aiName.value = name
         _voiceType.value = voice
         _personalityType.value = personality
         _customPrompt.value = custom
+        _isWakeWordMode.value = wakeWordMode
+        _isHandsFreeMode.value = handsFreeMode
+
+        // Start or stop background listener on toggle change
+        if (wakeWordMode) {
+            startContinuousListening()
+        } else {
+            if (!isWaitingForCommand) stopListening()
+        }
 
         when (voice) {
             "Dễ thương" -> {
@@ -164,6 +232,10 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
             "Nữ" -> {
                 tts?.setPitch(1.1f)
                 tts?.setSpeechRate(1.0f)
+            }
+            "Robot" -> {
+                tts?.setPitch(0.1f)
+                tts?.setSpeechRate(0.8f)
             }
         }
     }
@@ -183,7 +255,7 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                 
                 // Gemini API Call
                 launch(Dispatchers.Main) { _emotion.value = PetEmotion.THINKING }
-                val sysText = StringBuilder("Bạn là một thú cưng ảo robot tên Xiaozi (Tiểu Trí). Đang trò chuyện bằng tiếng Việt. Trả lời rất ngắn gọn (1-2 câu). ")
+                val sysText = StringBuilder("Bạn là một thú cưng ảo robot tên ${_aiName.value}. Đang trò chuyện bằng tiếng Việt. Trả lời rất ngắn gọn (1-2 câu). ")
                 if (_customPrompt.value.isNotEmpty()) {
                     sysText.append(_customPrompt.value).append(" ")
                 }
@@ -276,6 +348,20 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
             _isSpeaking.value = false
             if (_emotion.value == PetEmotion.EXCITED || _emotion.value == PetEmotion.HAPPY) {
                 _emotion.value = PetEmotion.IDLE
+            }
+            
+            // If we were waiting for command and the pet said "Dạ, em nghe đây", actually start listening
+            if (isWaitingForCommand) {
+                 startListening()
+            } else {
+                 if (_isHandsFreeMode.value) {
+                     // Automatically listen for continuous conversation without wake word
+                     isWaitingForCommand = true
+                     startListening()
+                 } else if (_isWakeWordMode.value) {
+                     // Resume normal wake word mode
+                     startContinuousListening()
+                 }
             }
         }
     }
