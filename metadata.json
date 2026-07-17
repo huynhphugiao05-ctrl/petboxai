@@ -1,0 +1,6 @@
+{
+  "name": "PetBot AI",
+  "description": "Thú cưng ảo tương tác giọng nói với biểu cảm sinh động, kết hợp công nghệ Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
