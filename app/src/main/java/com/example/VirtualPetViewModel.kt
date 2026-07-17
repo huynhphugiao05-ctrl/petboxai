@@ -269,6 +269,8 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun processUserInput(input: String) {
+        if (input.trim().length <= 2) return
+        
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (apiKey.isEmpty()) {
@@ -319,8 +321,24 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                     .post(body)
                     .build()
 
-                val response = httpClient.newCall(request).execute()
-                if (response.isSuccessful) {
+                var response: okhttp3.Response? = null
+                var attempt = 0
+                val maxAttempts = 3
+                
+                while (attempt < maxAttempts) {
+                    response = httpClient.newCall(request).execute()
+                    if (response.code == 429) {
+                        // Rate limit exceeded, wait and retry
+                        attempt++
+                        if (attempt >= maxAttempts) break
+                        kotlinx.coroutines.delay(2000L * attempt)
+                    } else {
+                        break
+                    }
+                }
+                
+                val finalResponse = response
+                if (finalResponse != null && finalResponse.isSuccessful) {
                     val resStr = response.body?.string() ?: ""
                     val root = JSONObject(resStr)
                     val text = root.getJSONArray("candidates")
@@ -349,12 +367,13 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                         speak(petResponse)
                     }
                 } else {
-                    val code = response.code
-                    val errorBody = response.body?.string() ?: ""
+                    val code = finalResponse?.code ?: -1
+                    val errorBody = finalResponse?.body?.string() ?: ""
                     Log.e("Gemini", "API Error: $code, $errorBody")
                     launch(Dispatchers.Main) {
                         _emotion.value = PetEmotion.SAD
-                        speak("Lỗi mạng rồi chủ nhân ơi. Mã lỗi: $code")
+                        val errorMsg = if (code == 429) "Mình đang phải nghĩ nhiều quá, chờ chút nhé!" else "Lỗi mạng rồi chủ nhân ơi. Mã lỗi: $code"
+                        speak(errorMsg)
                     }
                 }
             } catch (e: Exception) {
