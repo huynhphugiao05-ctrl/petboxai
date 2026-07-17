@@ -62,6 +62,7 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
+    private var silenceTimer: kotlinx.coroutines.Job? = null
 
     private val apiKey = BuildConfig.GEMINI_API_KEY
     private val httpClient = OkHttpClient.Builder()
@@ -111,6 +112,7 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                     }
                 }
                 override fun onResults(results: Bundle?) {
+                    silenceTimer?.cancel()
                     _isListening.value = false
                     _partialSpeechText.value = ""
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
@@ -120,9 +122,18 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                         
                         if (_isWakeWordMode.value && !isWaitingForCommand) {
                             val triggerName = _aiName.value.lowercase()
-                            if (text.lowercase().contains(triggerName)) {
-                                isWaitingForCommand = true
-                                speak("Dạ, em nghe đây")
+                            val lowerText = text.lowercase()
+                            if (lowerText.contains(triggerName)) {
+                                // Extract the part after the name
+                                val commandPart = lowerText.substringAfter(triggerName).trim()
+                                if (commandPart.isNotBlank()) {
+                                    // User said name + command in the same sentence (e.g. "Tiểu Trí ơi thời tiết sao")
+                                    isWaitingForCommand = false // reset flag since we are processing it
+                                    processUserInput(commandPart)
+                                } else {
+                                    isWaitingForCommand = true
+                                    speak("Dạ, em nghe đây")
+                                }
                             } else {
                                 // Name not detected, restart listening implicitly
                                 startContinuousListening()
@@ -131,8 +142,6 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                             // Normal manual fetch or already waiting for command
                             isWaitingForCommand = false
                             processUserInput(text)
-                            
-                            // Restart wake word loop after processing if mode is on (this will be called in speak completion)
                         }
                     } else {
                         // Empty match
@@ -145,7 +154,11 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                 override fun onPartialResults(partialResults: Bundle?) {
                     val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     if (!matches.isNullOrEmpty()) {
-                        _partialSpeechText.value = matches[0]
+                        val currentText = matches[0]
+                        if (currentText.isNotBlank()) {
+                            _partialSpeechText.value = currentText
+                            resetSilenceTimer()
+                        }
                     }
                 }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -163,6 +176,7 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
             tts?.stop()
             _isSpeaking.value = false
         }
+        silenceTimer?.cancel()
         _partialSpeechText.value = ""
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -175,9 +189,23 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         _isListening.value = true
         _emotion.value = PetEmotion.LISTENING
         speechRecognizer?.startListening(intent)
+        
+        // Start an initial timer just in case no words are ever spoken
+        resetSilenceTimer()
+    }
+
+    private fun resetSilenceTimer() {
+        silenceTimer?.cancel()
+        silenceTimer = viewModelScope.launch(Dispatchers.Main) {
+            kotlinx.coroutines.delay(2000L) // Wait 2 seconds of silence
+            if (_isListening.value) {
+                stopListening()
+            }
+        }
     }
 
     fun stopListening() {
+        silenceTimer?.cancel()
         speechRecognizer?.stopListening()
         _isListening.value = false
         isWaitingForCommand = false
