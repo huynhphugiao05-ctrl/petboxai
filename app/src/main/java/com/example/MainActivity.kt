@@ -261,28 +261,18 @@ fun VirtualPetScreen(
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         if (isDeepNightMode) {
-            // Chế độ Màn hình Đồng hồ Siêu Tối
-            Column(
+            // Chế độ Màn hình Đồng hồ Siêu Tối Nằm Ngang
+            Row(
                 modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                val parts = currentTime.split(":")
                 Text(
-                    text = parts.getOrNull(0) ?: "00",
+                    text = currentTime,
                     color = Color(0xFF1E1E1E), // Xám siêu tối, lờ mờ
-                    fontSize = 240.sp,
+                    fontSize = 260.sp,
                     fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.SansSerif,
-                    lineHeight = 240.sp
-                )
-                Text(
-                    text = parts.getOrNull(1) ?: "00",
-                    color = Color(0xFF1E1E1E),
-                    fontSize = 240.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.SansSerif,
-                    lineHeight = 240.sp
+                    fontFamily = FontFamily.SansSerif
                 )
             }
             
@@ -295,14 +285,37 @@ fun VirtualPetScreen(
             }
 
         } else {
-            // Chế độ Hành Động Vô Tri Bình Thường
-            Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+            // Chế độ Hành Động Vô Tri Bình Thường Nằm Ngang (Row 40/60)
+            Row(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // Bên trái 40% (Giờ và ngày)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.weight(0.4f)
+                ) {
+                    Text(
+                        text = currentTime,
+                        color = Color.White,
+                        fontSize = 110.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.SansSerif,
+                        letterSpacing = 2.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = currentDate,
+                        color = Color.LightGray,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                // Bên phải 60% (Robot và Hạt bụi)
                 Box(
-                    modifier = Modifier.weight(1f).padding(top = 40.dp),
+                    modifier = Modifier.weight(0.6f).fillMaxHeight(),
                     contentAlignment = Alignment.Center
                 ) {
                     Canvas(modifier = Modifier.size(400.dp)) {
@@ -326,27 +339,6 @@ fun VirtualPetScreen(
                         onTap = { viewModel.poke() },
                         onDoubleTap = { viewModel.doubleTap() },
                         onPet = { viewModel.pet() }
-                    )
-                }
-                
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(bottom = 80.dp)
-                ) {
-                    Text(
-                        text = currentTime,
-                        color = Color.White,
-                        fontSize = 90.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.SansSerif,
-                        letterSpacing = 2.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = currentDate,
-                        color = Color.LightGray,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Medium
                     )
                 }
             }
