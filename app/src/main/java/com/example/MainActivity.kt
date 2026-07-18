@@ -211,7 +211,7 @@ fun VirtualPetScreen(
             }
         }
     }
-
+}
 
 @Composable
 fun AdvancedRobot(
