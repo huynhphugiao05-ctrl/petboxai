@@ -153,14 +153,18 @@ fun VirtualPetScreen(
     onStartListening: () -> Unit
 ) {
     val emotion by viewModel.emotion.collectAsState()
-    val isListening by viewModel.isListening.collectAsState()
-    val isSpeaking by viewModel.isSpeaking.collectAsState()
-    val chatLog by viewModel.chatLog.collectAsState()
-    val partialSpeech by viewModel.partialSpeechText.collectAsState()
+    val bg = Color.Black
 
-    val bg = Color(0xFF161A23)
-    val lightText = Color(0xFFE2E8F0)
-    var showSettings by remember { mutableStateOf(false) }
+    var currentTime by remember { mutableStateOf(java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())) }
+    var currentDate by remember { mutableStateOf(java.text.SimpleDateFormat("EEEE, dd/MM/yyyy", java.util.Locale("vi", "VN")).format(java.util.Date())) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            currentTime = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            currentDate = java.text.SimpleDateFormat("EEEE, dd/MM/yyyy", java.util.Locale("vi", "VN")).format(java.util.Date())
+            kotlinx.coroutines.delay(1000)
+        }
+    }
 
     Box(modifier = modifier.fillMaxSize().background(bg)) {
         Column(
@@ -170,275 +174,44 @@ fun VirtualPetScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // Pet ở giữa
             Box(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(top = 40.dp),
                 contentAlignment = Alignment.Center
             ) {
                 AdvancedRobot(
                     emotion = emotion,
-                    isSpeaking = isSpeaking,
-                    isListening = isListening,
-                    onTap = {
-                        if (isListening) viewModel.stopListening()
-                        else onStartListening()
-                    },
+                    isSpeaking = false,
+                    isListening = false,
+                    onTap = { viewModel.poke() },
                     onPet = { viewModel.pet() }
                 )
             }
             
-            val latestMessage = chatLog.lastOrNull()
-            if (partialSpeech.isNotEmpty()) {
-                Text(
-                    text = partialSpeech,
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFFFF6B9D)
-                    ),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(24.dp)
-                )
-            } else if (latestMessage != null) {
-                Text(
-                    text = latestMessage,
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Medium,
-                        color = lightText
-                    ),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(24.dp)
-                )
-            } else {
-                val currentWakeWordMode by viewModel.isWakeWordMode.collectAsState()
-                Text(
-                    text = if (currentWakeWordMode) "Đang chờ gọi tên..." else "Chạm vào bé để bắt đầu",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = lightText.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(24.dp)
-                )
-            }
-        }
-
-        IconButton(
-            onClick = { showSettings = true },
-            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = "Settings",
-                tint = lightText
-            )
-        }
-
-        if (showSettings) {
-            val currentAiName by viewModel.aiName.collectAsState()
-            val currentVoice by viewModel.voiceType.collectAsState()
-            val currentPersonality by viewModel.personalityType.collectAsState()
-            val currentCustomPrompt by viewModel.customPrompt.collectAsState()
-            val currentWakeWordMode by viewModel.isWakeWordMode.collectAsState()
-            val currentHandsFreeMode by viewModel.isHandsFreeMode.collectAsState()
-            
-            SettingsDialog(
-                initialName = currentAiName,
-                initialVoice = currentVoice,
-                initialPersonality = currentPersonality,
-                initialCustomPrompt = currentCustomPrompt,
-                initialWakeWordMode = currentWakeWordMode,
-                initialHandsFreeMode = currentHandsFreeMode,
-                onDismiss = { showSettings = false },
-                onSave = { name, voice, personality, custom, wakeWordMode, handsFreeMode ->
-                    viewModel.updateSettings(name, voice, personality, custom, wakeWordMode, handsFreeMode)
-                    showSettings = false
-                }
-            )
-        }
-    }
-}
-
-@Composable
-fun SettingsDialog(
-    initialName: String,
-    initialVoice: String,
-    initialPersonality: String,
-    initialCustomPrompt: String,
-    initialWakeWordMode: Boolean,
-    initialHandsFreeMode: Boolean,
-    onDismiss: () -> Unit,
-    onSave: (String, String, String, String, Boolean, Boolean) -> Unit
-) {
-    var aiName by remember { mutableStateOf(initialName) }
-    var selectedVoice by remember { mutableStateOf(initialVoice) }
-    var selectedPersonality by remember { mutableStateOf(initialPersonality) }
-    var customPrompt by remember { mutableStateOf(initialCustomPrompt) }
-    var wakeWordMode by remember { mutableStateOf(initialWakeWordMode) }
-    var handsFreeMode by remember { mutableStateOf(initialHandsFreeMode) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = Color(0xFF1E2330),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF333D52)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+            // Đồng hồ nằm dưới
             Column(
-                modifier = Modifier
-                    .padding(24.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(bottom = 80.dp)
             ) {
                 Text(
-                    text = "Cài đặt & Tùy chỉnh AI",
-                    style = MaterialTheme.typography.titleLarge,
+                    text = currentTime,
                     color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 90.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.SansSerif,
+                    letterSpacing = 2.sp
                 )
-                
-                // Name option
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Tên AI", color = Color(0xFFA0AABF), style = MaterialTheme.typography.labelLarge)
-                    OutlinedTextField(
-                        value = aiName,
-                        onValueChange = { aiName = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFFFF6B9D),
-                            unfocusedBorderColor = Color(0xFF333D52),
-                            cursorColor = Color(0xFFFF6B9D)
-                        ),
-                        singleLine = true
-                    )
-                }
-
-                // Voice options
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Giọng nói", color = Color(0xFFA0AABF), style = MaterialTheme.typography.labelLarge)
-                    val voices = listOf("Dễ thương", "Nam", "Nữ", "Robot")
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()), 
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        voices.forEach { voice ->
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = if (selectedVoice == voice) Color(0xFFFF6B9D) else Color(0xFF2A3143),
-                                border = if (selectedVoice == voice) null else androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B465E)),
-                                modifier = Modifier.clickable { selectedVoice = voice }
-                            ) {
-                                Text(
-                                    text = voice, 
-                                    color = if (selectedVoice == voice) Color.White else Color(0xFFCCD5E6), 
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                                    fontWeight = if (selectedVoice == voice) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
-                }
-                
-                // Personality options
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Tính cách", color = Color(0xFFA0AABF), style = MaterialTheme.typography.labelLarge)
-                    val personalities = listOf("Lịch sự", "Hài hước", "Gần gũi", "Chợ búa")
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()), 
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        personalities.forEach { p ->
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = if (selectedPersonality == p) Color(0xFFFF6B9D) else Color(0xFF2A3143),
-                                border = if (selectedPersonality == p) null else androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B465E)),
-                                modifier = Modifier.clickable { selectedPersonality = p }
-                            ) {
-                                Text(
-                                    text = p, 
-                                    color = if (selectedPersonality == p) Color.White else Color(0xFFCCD5E6), 
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                                    fontWeight = if (selectedPersonality == p) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Custom prompt / personal info
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Chỉ thị đặc biệt", color = Color(0xFFA0AABF), style = MaterialTheme.typography.labelLarge)
-                    OutlinedTextField(
-                        value = customPrompt,
-                        onValueChange = { customPrompt = it },
-                        placeholder = { Text("Ví dụ: Xưng hô là 'Mèo con', thích ăn cá...", color = Color.Gray) },
-                        modifier = Modifier.fillMaxWidth().height(100.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFFFF6B9D),
-                            unfocusedBorderColor = Color(0xFF333D52),
-                            cursorColor = Color(0xFFFF6B9D)
-                        ),
-                        maxLines = 3
-                    )
-                }
-
-                // Wake Word toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Chế độ gọi tên", color = Color.White, style = MaterialTheme.typography.titleMedium)
-                        Text("Nói '$aiName' để gọi", color = Color(0xFFA0AABF), style = MaterialTheme.typography.bodySmall)
-                    }
-                    Switch(
-                        checked = wakeWordMode,
-                        onCheckedChange = { wakeWordMode = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFFFF6B9D),
-                            uncheckedThumbColor = Color(0xFFA0AABF),
-                            uncheckedTrackColor = Color(0xFF333D52)
-                        )
-                    )
-                }
-
-                // Hands free mode
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Trò chuyện rảnh tay", color = Color.White, style = MaterialTheme.typography.titleMedium)
-                        Text("Tự động lắng nghe câu tiếp theo", color = Color(0xFFA0AABF), style = MaterialTheme.typography.bodySmall)
-                    }
-                    Switch(
-                        checked = handsFreeMode,
-                        onCheckedChange = { handsFreeMode = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFFFF6B9D),
-                            uncheckedThumbColor = Color(0xFFA0AABF),
-                            uncheckedTrackColor = Color(0xFF333D52)
-                        )
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-                Button(
-                    onClick = { onSave(aiName, selectedVoice, selectedPersonality, customPrompt, wakeWordMode, handsFreeMode) },
-                    modifier = Modifier.fillMaxWidth().height(54.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B9D)),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("Lưu & Đóng", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
-                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = currentDate,
+                    color = Color.LightGray,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     }
-}
+
 
 @Composable
 fun AdvancedRobot(
