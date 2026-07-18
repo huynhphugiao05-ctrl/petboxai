@@ -75,22 +75,43 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     private fun loadModel(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             val modelName = "gemma-2b-it.task"
-            val externalFilesDir = context.getExternalFilesDir(null)
-            val modelFile = if (externalFilesDir != null) File(externalFilesDir, modelName) else File(context.filesDir, modelName)
+            val internalFile = File(context.filesDir, modelName)
+            val externalFile = File(context.getExternalFilesDir(null), modelName)
             
-            if (!modelFile.exists()) {
-                launch(Dispatchers.Main) {
-                    _emotion.value = PetEmotion.SAD
-                    addLog("Hệ thống: Chưa tìm thấy não AI!")
-                    addLog("Vui lòng cắm cáp USB và chép file gemma-2b-it.task vào thư mục sau trên điện thoại: Android/data/com.aistudio.xiaozhiclient.rpnxqa/files/")
-                    speak("Chủ nhân ơi, em chưa có não. Hãy kết nối điện thoại với máy tính để truyền não vào cho em nhé!")
+            // Xử lý nạp não vào vùng nhớ tuyệt mật để không bị lỗi permission/mmap
+            if (!internalFile.exists()) {
+                if (externalFile.exists()) {
+                    launch(Dispatchers.Main) {
+                        _emotion.value = PetEmotion.THINKING
+                        addLog("Hệ thống: Đang định tuyến não vào bộ nhớ trong (Sẽ mất khoảng 1-2 phút, vui lòng KHÔNG tắt app)...")
+                    }
+                    try {
+                        externalFile.inputStream().use { input ->
+                            FileOutputStream(internalFile).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        launch(Dispatchers.Main) { 
+                             _emotion.value = PetEmotion.ERROR
+                            addLog("Hệ thống: Lỗi rút não: ${e.message}") 
+                        }
+                        return@launch
+                    }
+                } else {
+                    launch(Dispatchers.Main) {
+                        _emotion.value = PetEmotion.SAD
+                        addLog("Hệ thống: Chưa tìm thấy não AI!")
+                        addLog("Vui lòng chép file gemma-2b-it.task vào: Android/data/com.aistudio.xiaozhiclient.rpnxqa/files/")
+                        speak("Chủ nhân ơi, em chưa có não.")
+                    }
+                    return@launch
                 }
-                return@launch
             }
             
             try {
                 val options = LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(modelFile.absolutePath)
+                    .setModelPath(internalFile.absolutePath)
                     .setMaxTokens(128)
                     .build()
                 llmInference = LlmInference.createFromOptions(context, options)
@@ -101,7 +122,11 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                     speak("Em đã khởi động xong não bộ, hoàn toàn offline ạ!")
                 }
             } catch (e: Exception) {
-                launch(Dispatchers.Main) { addLog("Hệ thống: Lỗi khởi tạo MediaPipe: ${e.message}") }
+                launch(Dispatchers.Main) { 
+                    _emotion.value = PetEmotion.ERROR
+                    addLog("Hệ thống: Lỗi phần cứng MediaPipe: ${e.message}") 
+                    addLog("Phân tích: Có vẻ điện thoại này bị tràn RAM khi nạp 1.5GB rồi!")
+                }
             }
         }
     }
