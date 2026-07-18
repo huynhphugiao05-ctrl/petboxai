@@ -14,7 +14,7 @@ import java.util.Calendar
 import java.util.Locale
 
 enum class PetEmotion {
-    IDLE, HAPPY, SAD, SURPRISED, EXCITED, LISTENING, LOVE, THINKING, ERROR, SLEEPY
+    IDLE, HAPPY, SAD, SURPRISED, EXCITED, LISTENING, LOVE, THINKING, ERROR, SLEEPY, SNEEZING, DIZZY, EATING
 }
 
 class VirtualPetViewModel(application: Application) : AndroidViewModel(application) {
@@ -55,6 +55,10 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
 
     private var behaviorJob: kotlinx.coroutines.Job? = null
     private var lastInteractionTime = System.currentTimeMillis()
+    
+    private var hasAnnouncedMorning = false
+    private var hasAnnouncedNight = false
+    private var isMealTimeAnnounced = false
 
     private var tts: TextToSpeech? = null
 
@@ -77,7 +81,6 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun playSound(texts: List<String>) {
-        // Random chọn ra 1 câu vô tri để phát âm
         tts?.speak(texts.random(), TextToSpeech.QUEUE_FLUSH, null, null)
     }
 
@@ -88,34 +91,76 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                 delay(1000)
                 val currentTime = System.currentTimeMillis()
                 
+                val calendar = Calendar.getInstance()
+                val hour = calendar.get(Calendar.HOUR_OF_DAY)
+                val minute = calendar.get(Calendar.MINUTE)
+                val isNight = hour >= 21 || hour < 6 // Lùi giờ ngủ xuống 21h
+                
+                // Routine Announcer Logic
+                if (hour == 6 && minute == 0 && !hasAnnouncedMorning) {
+                    hasAnnouncedMorning = true
+                    hasAnnouncedNight = false // reset for night
+                    _emotion.value = PetEmotion.EXCITED
+                    tts?.speak("Ò ó o... 6 giờ sáng rồi, dậy đi mọi người ơi, vươn vai chào ngày mới nào!", TextToSpeech.QUEUE_FLUSH, null, null)
+                    markInteraction()
+                    restartBehaviorTimer(10000)
+                    continue
+                }
+                
+                if (hour == 21 && minute == 0 && !hasAnnouncedNight) {
+                    hasAnnouncedNight = true
+                    hasAnnouncedMorning = false // reset for morning
+                    _emotion.value = PetEmotion.SLEEPY
+                    tts?.speak("9 giờ tối rồi, các bạn đi ngủ sớm cho khỏe nha. Nhớ đắp mền kẻo lạnh xì trum, chúc ngủ ngon!", TextToSpeech.QUEUE_FLUSH, null, null)
+                    markInteraction()
+                    restartBehaviorTimer(10000)
+                    continue
+                }
+
+                // Giờ ăn (7h, 12h, 19h)
+                val isMealTime = (hour == 7 || hour == 12 || hour == 19)
+                if (isMealTime && minute == 0 && !isMealTimeAnnounced) {
+                    isMealTimeAnnounced = true
+                    _emotion.value = PetEmotion.EATING
+                    tts?.speak("Đến giờ ăn rồi! Măm măm măm, chóp chép ngon quá!", TextToSpeech.QUEUE_FLUSH, null, null)
+                    markInteraction()
+                    restartBehaviorTimer(15000)
+                    continue
+                }
+                if (!isMealTime && minute > 0) {
+                    isMealTimeAnnounced = false
+                }
+
                 // Trạng thái vô tri: Nếu 5 giây không ai đụng vào
                 if (currentTime - lastInteractionTime > 5000) {
-                    val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                    val isNight = hour >= 23 || hour <= 6
-                    
                     if (isNight) {
-                        // Ban đêm thì khò khò
                         if (_emotion.value != PetEmotion.SLEEPY) {
                             _emotion.value = PetEmotion.SLEEPY
                         }
-                        // Thỉnh thoảng nghe ngáy khò khò nhỏ nhỏ
                         if (Math.random() > 0.95) {
                             tts?.setPitch(0.5f) // Ngáy trầm
-                            playSound(listOf("Khò... khò...", "Zzz zzz...", "Khò..."))
-                            tts?.setPitch(2.0f) // Trả lại giọng minion
+                            playSound(listOf("Khò... khò...", "Zzz zzz..."))
+                            tts?.setPitch(2.0f) 
                         }
                     } else {
-                        // Ban ngày thi thoảng vô tri thay đổi sắc mặt
-                        // Tỉ lệ 20% mỗi giây sẽ thay đổi cảm xúc
+                        // Ban ngày thi thoảng vô tri
                         if (Math.random() > 0.8) {
-                            val randomEmotions = listOf(
+                            var nextEmotion = listOf(
                                 PetEmotion.IDLE, PetEmotion.IDLE, PetEmotion.HAPPY, 
                                 PetEmotion.THINKING, PetEmotion.IDLE
-                            )
-                            val nextEmotion = randomEmotions.random()
+                            ).random()
+
+                            // 5% tỷ lệ hắt xì ngẫu nhiên
+                            if (Math.random() > 0.95) {
+                                nextEmotion = PetEmotion.SNEEZING
+                                playSound(listOf("Hắt xì... ui ướt hết màn hình!", "Ắt xì", "Sụt sịt... lạnh quá"))
+                                _emotion.value = nextEmotion
+                                restartBehaviorTimer(3000)
+                                continue
+                            }
+
                             _emotion.value = nextEmotion
 
-                            // 10% tỷ lệ lảm nhảm ra tiếng khi vô tri
                             if (Math.random() > 0.9) {
                                 val sillySounds = when (nextEmotion) {
                                     PetEmotion.HAPPY -> listOf("La la la", "Vê lốc đê", "Tê ga tê ga", "Ha ha ha")
@@ -135,11 +180,10 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         lastInteractionTime = System.currentTimeMillis()
     }
 
-    // Các hàm tương tác
     fun onShake() {
         markInteraction()
-        _emotion.value = PetEmotion.SURPRISED
-        playSound(listOf("Ối giời ôi", "Động đất à", "Chóng mặt quá", "A lô a lô!"))
+        _emotion.value = PetEmotion.DIZZY // Lắc mạnh thì DIZZY thay vì chỉ Surprised
+        playSound(listOf("Chóng mặt quá... chóng mặt quá", "Ối giời ôi", "Động đất à"))
         restartBehaviorTimer()
     }
 
@@ -157,18 +201,23 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         restartBehaviorTimer()
     }
 
-    private fun restartBehaviorTimer() {
-        // Sau khi bị tương tác, nó giữ mặt 3 giây rồi trở lại bình thường
+    fun doubleTap() { // gõ 2 lần để ăn
+        markInteraction()
+        _emotion.value = PetEmotion.EATING
+        playSound(listOf("Măm măm", "Ngon tuyệt cú mèo", "Chóp chép chóp chép"))
+        restartBehaviorTimer(5000)
+    }
+
+    private fun restartBehaviorTimer(delayMs: Long = 3000) {
         viewModelScope.launch {
-            delay(3000)
-            if (System.currentTimeMillis() - lastInteractionTime >= 3000) {
+            delay(delayMs)
+            if (System.currentTimeMillis() - lastInteractionTime >= delayMs) {
                 _emotion.value = PetEmotion.IDLE
             }
         }
     }
 
-    // Giữ lại các hàm rỗng để MainActivity hoạt động
-    fun startListening() { poke() } // Chạm vào màn hình sẽ gọi poke
+    fun startListening() { poke() } 
     fun stopListening() {}
     fun updateSettings(n: String, v: String, p: String, c: String, w: Boolean, h: Boolean) {}
 }
