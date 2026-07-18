@@ -16,14 +16,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import java.io.File
+import java.io.FileOutputStream
 
 enum class PetEmotion {
     IDLE, LISTENING, THINKING, SPEAKING, HAPPY, SURPRISED, SAD, SLEEPY, LOVE, EXCITED, ERROR
@@ -64,16 +63,46 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     private var tts: TextToSpeech? = null
     private var silenceTimer: kotlinx.coroutines.Job? = null
 
-    private val apiKey = BuildConfig.GEMINI_API_KEY
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private var llmInference: LlmInference? = null
+    private var isModelLoaded = false
 
     init {
         tts = TextToSpeech(application, this)
         setupSpeechRecognizer(application)
+        loadModel(application)
+    }
+
+    private fun loadModel(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val modelName = "gemma-2b-it.task"
+            val modelFile = File(context.filesDir, modelName)
+            
+            if (!modelFile.exists()) {
+                launch(Dispatchers.Main) {
+                    _emotion.value = PetEmotion.SAD
+                    addLog("Hệ thống: Chưa tìm thấy não AI!")
+                    addLog("Vui lòng cắm cáp USB và chép file gemma-2b-it.task vào thư mục sau trên điện thoại: Android/data/com.aistudio.xiaozhiclient.rpnxqa/files/")
+                    speak("Chủ nhân ơi, em chưa có não. Hãy kết nối điện thoại với máy tính để truyền não vào cho em nhé!")
+                }
+                return@launch
+            }
+            
+            try {
+                val options = LlmInference.LlmInferenceOptions.builder()
+                    .setModelPath(modelFile.absolutePath)
+                    .setMaxTokens(128)
+                    .build()
+                llmInference = LlmInference.createFromOptions(context, options)
+                isModelLoaded = true
+                launch(Dispatchers.Main) { 
+                    addLog("Hệ thống: Bộ não offline đã sẵn sàng!") 
+                    _emotion.value = PetEmotion.HAPPY
+                    speak("Em đã khởi động xong não bộ, hoàn toàn offline ạ!")
+                }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) { addLog("Hệ thống: Lỗi khởi tạo MediaPipe: ${e.message}") }
+            }
+        }
     }
 
     override fun onInit(status: Int) {
@@ -273,113 +302,51 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                if (apiKey.isEmpty()) {
+                if (!isModelLoaded || llmInference == null) {
                     launch(Dispatchers.Main) {
                         _emotion.value = PetEmotion.SAD
-                        val msg = "Chủ nhân quên nhập API Key trong phần Secrets rồi"
+                        val msg = "Bộ não chưa tải xong hoặc có lỗi khởi tạo, vui lòng đợi thêm!"
                         addLog("Hệ thống: $msg")
                         speak(msg)
                     }
                     return@launch
                 }
                 
-                // Gemini API Call
                 launch(Dispatchers.Main) { _emotion.value = PetEmotion.THINKING }
-                val sysText = StringBuilder("Bạn là một thú cưng ảo robot tên ${_aiName.value}. Đang trò chuyện bằng tiếng Việt. Trả lời rất ngắn gọn (1-2 câu). ")
+                
+                val promptText = java.lang.StringBuilder()
+                promptText.append("Bạn là một thú cưng ảo tên ${_aiName.value}. ")
                 if (_customPrompt.value.isNotEmpty()) {
-                    sysText.append(_customPrompt.value).append(" ")
+                    promptText.append("${_customPrompt.value} ")
                 }
-                sysText.append("Tính cách của bạn: ${_personalityType.value}. ")
-                sysText.append("Dạng JSON format: {\"response\": \"câu trả lời\", \"emotion\": \"idle|happy|surprised|sad|sleepy|love|excited\"}")
+                promptText.append("Tính cách của bạn: ${_personalityType.value}. ")
+                promptText.append("Bắt buộc chỉ trả lời bằng Tiếng Việt và rất ngắn gọn trong 1-2 câu. Không dùng ký tự lạ hay format đặc biệt.\n\n")
+                promptText.append("Chủ nhân: $input\n")
+                promptText.append("${_aiName.value}:")
 
-                val requestJson = JSONObject().apply {
-                    put("system_instruction", JSONObject().apply {
-                        put("parts", JSONArray().apply {
-                            put(JSONObject().apply {
-                                put("text", sysText.toString())
-                            })
-                        })
-                    })
-                    put("contents", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("parts", JSONArray().apply {
-                                put(JSONObject().apply {
-                                    put("text", input)
-                                })
-                            })
-                        })
-                    })
-                    put("generationConfig", JSONObject().apply {
-                        put("response_mime_type", "application/json")
-                    })
-                }
-
-                val body = requestJson.toString().toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    // MUST use preview model per gemini-api skill
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-                    .post(body)
-                    .build()
-
-                var response: okhttp3.Response? = null
-                var attempt = 0
-                val maxAttempts = 3
+                val resStr = llmInference?.generateResponse(promptText.toString()) ?: ""
+                val petResponse = resStr.trim()
                 
-                while (attempt < maxAttempts) {
-                    response = httpClient.newCall(request).execute()
-                    if (response.code == 429) {
-                        // Rate limit exceeded, wait and retry
-                        attempt++
-                        if (attempt >= maxAttempts) break
-                        kotlinx.coroutines.delay(2000L * attempt)
-                    } else {
-                        break
-                    }
-                }
-                
-                val finalResponse = response
-                if (finalResponse != null && finalResponse.isSuccessful) {
-                    val resStr = response.body?.string() ?: ""
-                    val root = JSONObject(resStr)
-                    val text = root.getJSONArray("candidates")
-                        .getJSONObject(0)
-                        .getJSONObject("content")
-                        .getJSONArray("parts")
-                        .getJSONObject(0)
-                        .getString("text")
+                // Do mô hình thô trên máy sinh JSON độ tin cậy thấp, ta dùng từ khoá cảm xúc
+                var petEmotion = PetEmotion.IDLE
+                val lowerRes = petResponse.lowercase()
+                if (lowerRes.contains("vui") || lowerRes.contains("haha") || lowerRes.contains("dạ") || lowerRes.contains("thích")) petEmotion = PetEmotion.HAPPY
+                else if (lowerRes.contains("buồn") || lowerRes.contains("tội") || lowerRes.contains("khóc")) petEmotion = PetEmotion.SAD
+                else if (lowerRes.contains("ngạc nhiên") || lowerRes.contains("ủa") || lowerRes.contains("trời ơi")) petEmotion = PetEmotion.SURPRISED
+                else if (lowerRes.contains("ngủ") || lowerRes.contains("buồn ngủ") || lowerRes.contains("ngáp")) petEmotion = PetEmotion.SLEEPY
+                else if (lowerRes.contains("yêu") || lowerRes.contains("thương") || lowerRes.contains("ôm")) petEmotion = PetEmotion.LOVE
+                else if (lowerRes.contains("tức") || lowerRes.contains("giận") || lowerRes.contains("ghét") || lowerRes.contains("đau")) petEmotion = PetEmotion.ERROR
 
-                    // Parse internal JSON
-                    val parsed = JSONObject(text)
-                    val petResponse = parsed.optString("response", "Mình không hiểu lắm")
-                    val petEmotion = parsed.optString("emotion", "idle")
-
-                    launch(Dispatchers.Main) {
-                        _emotion.value = when(petEmotion.lowercase()) {
-                            "happy" -> PetEmotion.HAPPY
-                            "sad" -> PetEmotion.SAD
-                            "surprised" -> PetEmotion.SURPRISED
-                            "sleepy" -> PetEmotion.SLEEPY
-                            "love" -> PetEmotion.LOVE
-                            "excited" -> PetEmotion.EXCITED
-                            else -> PetEmotion.IDLE
-                        }
-                        addLog("Pet: $petResponse")
-                        speak(petResponse)
-                    }
-                } else {
-                    val code = finalResponse?.code ?: -1
-                    val errorBody = finalResponse?.body?.string() ?: ""
-                    Log.e("Gemini", "API Error: $code, $errorBody")
-                    launch(Dispatchers.Main) {
-                        _emotion.value = PetEmotion.SAD
-                        val errorMsg = if (code == 429) "Mình đang phải nghĩ nhiều quá, chờ chút nhé!" else "Lỗi mạng rồi chủ nhân ơi. Mã lỗi: $code"
-                        speak(errorMsg)
-                    }
+                launch(Dispatchers.Main) {
+                    _emotion.value = petEmotion
+                    addLog("Pet: $petResponse")
+                    speak(petResponse)
                 }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
                     _emotion.value = PetEmotion.SAD
-                    Log.e("Gemini", "Error", e)
+                    Log.e("Gemma", "Error", e)
+                    speak("Đầu em đau quá, không nghĩ được gì cả.")
                 }
             }
         }
