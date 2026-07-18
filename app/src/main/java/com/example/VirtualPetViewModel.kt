@@ -75,7 +75,8 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     private fun loadModel(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             val modelName = "gemma-2b-it.task"
-            val modelFile = File(context.filesDir, modelName)
+            val externalFilesDir = context.getExternalFilesDir(null)
+            val modelFile = if (externalFilesDir != null) File(externalFilesDir, modelName) else File(context.filesDir, modelName)
             
             if (!modelFile.exists()) {
                 launch(Dispatchers.Main) {
