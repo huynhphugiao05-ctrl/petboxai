@@ -243,6 +243,30 @@ fun AdvancedRobot(
         )
     )
 
+    // Ear flaping when excited or happy
+    val earFlap by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = if (emotion == PetEmotion.HAPPY || emotion == PetEmotion.EXCITED || emotion == PetEmotion.LOVE) 15f else 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(100, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        )
+    )
+
+    // Walking horizontally
+    var targetWalk by remember { mutableStateOf(0f) }
+    LaunchedEffect(emotion) {
+        while (true) {
+            delay((2000..6000).random().toLong())
+            if (emotion == PetEmotion.IDLE || emotion == PetEmotion.HAPPY || emotion == PetEmotion.THINKING) {
+                targetWalk = (-100..100).random().toFloat()
+            } else if (emotion == PetEmotion.SLEEPY) {
+                targetWalk = 0f
+            }
+        }
+    }
+    val animWalkOffset by animateFloatAsState(targetValue = targetWalk, animationSpec = tween(1500, easing = FastOutSlowInEasing))
+
     // Blinking logic
     var isBlinking by remember { mutableStateOf(false) }
     LaunchedEffect(emotion) {
@@ -281,20 +305,23 @@ fun AdvancedRobot(
     val bodyColor = Color(0xFFFAF5ED)
     val earColor = Color(0xFFFFB2B2)
     
-    // Target ear rotation
+    // Target ear rotation combining mode and flap
     val targetEarRot = when (emotion) {
         PetEmotion.SAD -> -15f
-        PetEmotion.LISTENING -> 15f
-        PetEmotion.SURPRISED -> 20f
+        PetEmotion.LISTENING -> 20f
+        PetEmotion.SURPRISED -> 35f
+        PetEmotion.EXCITED, PetEmotion.LOVE -> 25f
+        PetEmotion.SLEEPY -> -10f
         else -> 0f
     }
-    val earRot by animateFloatAsState(targetValue = targetEarRot, animationSpec = tween(500))
+    val earRot by animateFloatAsState(targetValue = targetEarRot, animationSpec = tween(300))
+    val finalEarRot = earRot + earFlap
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(340.dp)
-            .offset(y = floatAnim.dp)
+            .offset(x = animWalkOffset.dp, y = floatAnim.dp)
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { onTap() })
             }
@@ -318,7 +345,7 @@ fun AdvancedRobot(
             // Left ear
             withTransform({
                 translate(left = earOffset, top = h * 0.35f)
-                rotate(degrees = -earRot, pivot = Offset(earW, earH/2))
+                rotate(degrees = -finalEarRot, pivot = Offset(earW, earH/2))
             }) {
                 drawRoundRect(
                     color = earColor,
@@ -330,7 +357,7 @@ fun AdvancedRobot(
             // Right ear
             withTransform({
                 translate(left = w - earOffset - earW, top = h * 0.35f)
-                rotate(degrees = earRot, pivot = Offset(0f, earH/2))
+                rotate(degrees = finalEarRot, pivot = Offset(0f, earH/2))
             }) {
                 drawRoundRect(
                     color = earColor,
