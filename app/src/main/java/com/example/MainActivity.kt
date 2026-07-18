@@ -1,15 +1,15 @@
 package com.example
 
-import android.content.Intent
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Bundle
-import android.speech.RecognizerIntent
-import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
-import android.Manifest
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,19 +43,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.WindowInsetsCompat
-import android.view.WindowManager
-import kotlinx.coroutines.delay
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.ui.theme.MyApplicationTheme
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
-import android.content.Context
+import kotlinx.coroutines.delay
+import java.util.Calendar
 import kotlin.math.sqrt
 import kotlin.random.Random
-import java.util.Calendar
 
 class MainActivity : ComponentActivity() {
 
@@ -121,7 +116,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Particle system data class
 data class ZzzParticle(
     val id: Int,
     var x: Float,
@@ -130,21 +124,97 @@ data class ZzzParticle(
     val size: Float
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsDialog(
+    viewModel: VirtualPetViewModel,
+    onDismiss: () -> Unit
+) {
+    val sleepHour by viewModel.sleepHour.collectAsState()
+    val wakeHour by viewModel.wakeHour.collectAsState()
+    val customReminder by viewModel.customReminder.collectAsState()
+    val petName by viewModel.petName.collectAsState()
+    val isMuteIdleSounds by viewModel.isMuteIdleSounds.collectAsState()
+
+    var inputSleep by remember { mutableStateOf(sleepHour.toString()) }
+    var inputWake by remember { mutableStateOf(wakeHour.toString()) }
+    var inputReminder by remember { mutableStateOf(customReminder) }
+    var inputName by remember { mutableStateOf(petName) }
+    var inputMute by remember { mutableStateOf(isMuteIdleSounds) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Quản gia Petbot") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = inputName,
+                    onValueChange = { inputName = it },
+                    label = { Text("Tên gọi của Pet") },
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        modifier = Modifier.weight(1f),
+                        value = inputSleep,
+                        onValueChange = { inputSleep = it },
+                        label = { Text("Giờ đi ngủ (0-23)") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        modifier = Modifier.weight(1f),
+                        value = inputWake,
+                        onValueChange = { inputWake = it },
+                        label = { Text("Giờ báo thức (0-23)") },
+                        singleLine = true
+                    )
+                }
+                OutlinedTextField(
+                    value = inputReminder,
+                    onValueChange = { inputReminder = it },
+                    label = { Text("Lời nhắc báo thức") }
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = inputMute, onCheckedChange = { inputMute = it })
+                    Text("Tắt âm thanh vô tri ban ngày (Cần tập trung)")
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val sh = inputSleep.toIntOrNull() ?: 22
+                val wh = inputWake.toIntOrNull() ?: 6
+                viewModel.saveConfig(
+                    sleepH = sh.coerceIn(0, 23),
+                    wakeH = wh.coerceIn(0, 23),
+                    reminder = inputReminder,
+                    name = inputName,
+                    mute = inputMute
+                )
+                onDismiss()
+            }) {
+                Text("Lưu cấu hình")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Hủy") }
+        }
+    )
+}
+
 @Composable
 fun VirtualPetScreen(
     modifier: Modifier = Modifier, 
     viewModel: VirtualPetViewModel
 ) {
     val emotion by viewModel.emotion.collectAsState()
-    val bg = Color.Black
+    val isDeepNightMode by viewModel.isDeepNightMode.collectAsState()
 
     var currentTime by remember { mutableStateOf(java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())) }
     var currentDate by remember { mutableStateOf(java.text.SimpleDateFormat("EEEE, dd/MM/yyyy", java.util.Locale("vi", "VN")).format(java.util.Date())) }
     
-    var isNight by remember { mutableStateOf(false) }
-    var isNoon by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
 
-    // Particle state
     val particles = remember { mutableStateListOf<ZzzParticle>() }
 
     LaunchedEffect(Unit) {
@@ -156,16 +226,13 @@ fun VirtualPetScreen(
             
             val calendar = Calendar.getInstance()
             val hour = calendar.get(Calendar.HOUR_OF_DAY)
-            isNight = hour >= 21 || hour < 6
-            isNoon = hour in 11..14
             
-            // Zzz Particles emit when sleepy
-            if (emotion == PetEmotion.SLEEPY) {
+            if (emotion == PetEmotion.SLEEPY && !isDeepNightMode) {
                 if (Random.nextFloat() > 0.6f) {
                     particles.add(
                         ZzzParticle(
                             id = pId++,
-                            x = Random.nextFloat() * 200 - 100, // random x offset
+                            x = Random.nextFloat() * 200 - 100,
                             y = 0f,
                             alpha = 1f,
                             size = Random.nextFloat() * 10 + 20f
@@ -174,84 +241,121 @@ fun VirtualPetScreen(
                 }
             }
             
-            // Update particles
             val iterator = particles.iterator()
             while (iterator.hasNext()) {
                 val p = iterator.next()
                 p.y -= 5f
-                p.x += (Math.sin(p.y / 20.0).toFloat() * 3f) // Wiggle
+                p.x += (Math.sin(p.y / 20.0).toFloat() * 3f)
                 p.alpha -= 0.02f
                 if (p.alpha <= 0f) {
                     iterator.remove()
                 }
             }
-
             kotlinx.coroutines.delay(50)
         }
     }
 
-    Box(
-        modifier = modifier.fillMaxSize().background(bg)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            // Pet ở giữa
-            Box(
-                modifier = Modifier.weight(1f).padding(top = 40.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                // Draw particles behind
-                Canvas(modifier = Modifier.size(400.dp)) {
-                    val cx = size.width / 2
-                    val cy = size.height / 2 - 100.dp.toPx()
-                    for (p in particles) {
-                        drawContext.canvas.nativeCanvas.drawText(
-                            "Zzz",
-                            cx + p.x,
-                            cy + p.y,
-                            android.graphics.Paint().apply {
-                                color = android.graphics.Color.argb((p.alpha * 255).toInt(), 200, 200, 255)
-                                textSize = p.size.dp.toPx()
-                            }
-                        )
-                    }
-                }
+    if (showSettings) {
+        SettingsDialog(viewModel = viewModel, onDismiss = { showSettings = false })
+    }
 
-                AdvancedRobot(
-                    emotion = emotion,
-                    isNight = isNight,
-                    isNoon = isNoon,
-                    onTap = { viewModel.poke() },
-                    onDoubleTap = { viewModel.doubleTap() },
-                    onPet = { viewModel.pet() }
+    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+        if (isDeepNightMode) {
+            // Chế độ Màn hình Đồng hồ Siêu Tối
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                val parts = currentTime.split(":")
+                Text(
+                    text = parts.getOrNull(0) ?: "00",
+                    color = Color(0xFF1E1E1E), // Xám siêu tối, lờ mờ
+                    fontSize = 240.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.SansSerif,
+                    lineHeight = 240.sp
+                )
+                Text(
+                    text = parts.getOrNull(1) ?: "00",
+                    color = Color(0xFF1E1E1E),
+                    fontSize = 240.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.SansSerif,
+                    lineHeight = 240.sp
                 )
             }
             
-            // Đồng hồ nằm dưới
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(bottom = 80.dp)
+            // Nút Menu chìm, bấm vào ra Settings
+            IconButton(
+                onClick = { showSettings = true },
+                modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
             ) {
-                Text(
-                    text = currentTime,
-                    color = Color.White,
-                    fontSize = 90.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.SansSerif,
-                    letterSpacing = 2.sp
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = currentDate,
-                    color = Color.LightGray,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Medium
-                )
+                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color(0xFF1E1E1E))
+            }
+
+        } else {
+            // Chế độ Hành Động Vô Tri Bình Thường
+            Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier.weight(1f).padding(top = 40.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.size(400.dp)) {
+                        val cx = size.width / 2
+                        val cy = size.height / 2 - 100.dp.toPx()
+                        for (p in particles) {
+                            try {
+                                drawContext.canvas.nativeCanvas.drawText(
+                                    "Zzz", cx + p.x, cy + p.y,
+                                    android.graphics.Paint().apply {
+                                        color = android.graphics.Color.argb((p.alpha * 255).toInt(), 200, 200, 255)
+                                        textSize = p.size.dp.toPx()
+                                    }
+                                )
+                            } catch (e: Exception) {}
+                        }
+                    }
+
+                    AdvancedRobot(
+                        emotion = emotion,
+                        onTap = { viewModel.poke() },
+                        onDoubleTap = { viewModel.doubleTap() },
+                        onPet = { viewModel.pet() }
+                    )
+                }
+                
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(bottom = 80.dp)
+                ) {
+                    Text(
+                        text = currentTime,
+                        color = Color.White,
+                        fontSize = 90.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.SansSerif,
+                        letterSpacing = 2.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = currentDate,
+                        color = Color.LightGray,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = { showSettings = true },
+                modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.Gray)
             }
         }
     }
@@ -260,62 +364,42 @@ fun VirtualPetScreen(
 @Composable
 fun AdvancedRobot(
     emotion: PetEmotion,
-    isNight: Boolean,
-    isNoon: Boolean,
     onTap: () -> Unit,
     onDoubleTap: () -> Unit,
     onPet: () -> Unit
 ) {
     val infiniteTransition = rememberInfiniteTransition()
-    
-    // Breathing animation (vertical float)
     val floatAnim by infiniteTransition.animateFloat(
-        initialValue = -8f,
-        targetValue = 8f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        )
+        initialValue = -8f, targetValue = 8f,
+        animationSpec = infiniteRepeatable(animation = tween(2000, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse)
     )
     
-    // Heart pulse
     val heartPulse by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (emotion == PetEmotion.LOVE) 1.5f else 1.05f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(if (emotion == PetEmotion.LOVE) 600 else 1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        )
+        initialValue = 1f, targetValue = if (emotion == PetEmotion.LOVE) 1.5f else 1.05f,
+        animationSpec = infiniteRepeatable(animation = tween(if (emotion == PetEmotion.LOVE) 600 else 1000, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse)
     )
 
-    // Ear flaping when excited or happy
     val earFlap by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = if (emotion == PetEmotion.HAPPY || emotion == PetEmotion.EXCITED || emotion == PetEmotion.LOVE) 20f else 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(120, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        )
+        initialValue = 0f, targetValue = if (emotion == PetEmotion.HAPPY || emotion == PetEmotion.EXCITED || emotion == PetEmotion.LOVE || emotion == PetEmotion.DANCING) 20f else 0f,
+        animationSpec = infiniteRepeatable(animation = tween(if (emotion == PetEmotion.DANCING) 60 else 120, easing = LinearEasing), repeatMode = RepeatMode.Reverse)
     )
 
-    // Walking horizontally
+    val danceScale by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = if (emotion == PetEmotion.DANCING) 1.15f else 1f,
+        animationSpec = infiniteRepeatable(animation = tween(if (emotion == PetEmotion.DANCING) 250 else 1000, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse)
+    )
+
     var targetWalk by remember { mutableStateOf(0f) }
     LaunchedEffect(emotion) {
         while (true) {
-            delay((2000..6000).random().toLong())
-            if (emotion == PetEmotion.IDLE || emotion == PetEmotion.HAPPY || emotion == PetEmotion.THINKING) {
-                targetWalk = (-100..100).random().toFloat()
-            } else {
-                targetWalk = 0f
-            }
+            delay(if (emotion == PetEmotion.DANCING) 400 else (2000..6000).random().toLong())
+            targetWalk = if (emotion == PetEmotion.IDLE || emotion == PetEmotion.HAPPY || emotion == PetEmotion.THINKING) (-100..100).random().toFloat() else if (emotion == PetEmotion.DANCING) (-150..150).random().toFloat() else 0f
         }
     }
-    val animWalkOffset by animateFloatAsState(targetValue = targetWalk, animationSpec = tween(1500, easing = FastOutSlowInEasing))
+    val animWalkOffset by animateFloatAsState(targetValue = targetWalk, animationSpec = tween(if (emotion == PetEmotion.DANCING) 400 else 1500, easing = FastOutSlowInEasing))
 
-    // Dizzy / Sneezing shaking
     var shakeX by remember { mutableStateOf(0f) }
     var shakeY by remember { mutableStateOf(0f) }
-    
     LaunchedEffect(emotion) {
         while (true) {
             if (emotion == PetEmotion.DIZZY) {
@@ -324,9 +408,9 @@ fun AdvancedRobot(
                 delay(50)
             } else if (emotion == PetEmotion.SNEEZING) {
                 shakeX = 0f
-                shakeY = 30f // kéo đầu lùi về sau
+                shakeY = 30f 
                 delay(300)
-                shakeY = -40f // hắt xì văng lên
+                shakeY = -40f 
                 delay(100)
                 shakeX = (-10..10).random().toFloat()
                 delay(50)
@@ -343,7 +427,6 @@ fun AdvancedRobot(
     val animShakeX by animateFloatAsState(targetValue = shakeX, animationSpec = tween(if (emotion == PetEmotion.DIZZY) 50 else 100))
     val animShakeY by animateFloatAsState(targetValue = shakeY, animationSpec = tween(if (emotion == PetEmotion.DIZZY) 50 else 100))
 
-    // Blinking logic
     var isBlinking by remember { mutableStateOf(false) }
     LaunchedEffect(emotion) {
         while (true) {
@@ -362,7 +445,6 @@ fun AdvancedRobot(
         }
     }
     
-    // Eye tracking logic
     var touchPos by remember { mutableStateOf<Offset?>(null) }
     val animLookX by animateFloatAsState(targetValue = touchPos?.x ?: 0f, animationSpec = tween(100))
     val animLookY by animateFloatAsState(targetValue = touchPos?.y ?: 0f, animationSpec = tween(100))
@@ -370,52 +452,44 @@ fun AdvancedRobot(
     val bodyColor = Color(0xFFFAF5ED)
     val earColor = Color(0xFFFFB2B2)
     
-    // Target ear rotation
     val targetEarRot = when (emotion) {
         PetEmotion.SAD -> -15f
         PetEmotion.LISTENING -> 20f
         PetEmotion.SURPRISED -> 35f
         PetEmotion.EXCITED, PetEmotion.LOVE -> 25f
         PetEmotion.SLEEPY, PetEmotion.DIZZY -> -20f
-        PetEmotion.SNEEZING -> -30f // Cụp tai mạnh khi hắt xì
+        PetEmotion.SNEEZING -> -30f
+        PetEmotion.DANCING -> 40f
+        PetEmotion.EAVESDROPPING -> 90f // Chĩa ngang tai trái
         else -> 0f
     }
     val earRot by animateFloatAsState(targetValue = targetEarRot, animationSpec = tween(300))
-    val finalEarRot = earRot + earFlap
+    
+    val earLeftScaleTarget = if (emotion == PetEmotion.EAVESDROPPING) 1.6f else 1f
+    val earLeftScale by animateFloatAsState(targetValue = earLeftScaleTarget, animationSpec = tween(400))
+    
+    val finalEarLeftRot = earRot + earFlap
+    val finalEarRightRot = earRot - (if (emotion == PetEmotion.DANCING) earFlap else -earFlap)
 
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(340.dp)
             .offset(x = animWalkOffset.dp + animShakeX.dp, y = floatAnim.dp + animShakeY.dp)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { onTap() },
-                    onDoubleTap = { onDoubleTap() }
-                )
-            }
+            .scale(danceScale)
+            .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }, onDoubleTap = { onDoubleTap() }) }
             .pointerInput(Unit) {
                 detectDragGestures(
-                    onDragStart = { offset ->
-                        // Calculate relative to center of screen/robot
-                        touchPos = Offset(offset.x / 10 - 15f, offset.y / 10 - 15f)
-                    },
+                    onDragStart = { offset -> touchPos = Offset(offset.x / 10 - 15f, offset.y / 10 - 15f) },
                     onDrag = { change, dragAmount ->
                         val pos = change.position
-                        // Map touch pos to eyeball constraints roughly
                         touchPos = Offset(pos.x / 10 - 15f, pos.y / 10 - 15f)
-                        
-                        if (kotlin.math.abs(dragAmount.x) > 10 || kotlin.math.abs(dragAmount.y) > 10) {
-                            onPet() // Vuốt mạnh thì kích thích
-                        }
+                        if (kotlin.math.abs(dragAmount.x) > 10 || kotlin.math.abs(dragAmount.y) > 10) onPet()
                     },
-                    onDragEnd = {
-                        touchPos = null
-                    }
+                    onDragEnd = { touchPos = null }
                 )
             }
     ) {
-        // Draw Ears
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
@@ -423,21 +497,14 @@ fun AdvancedRobot(
             val earH = 110.dp.toPx()
             val earOffset = 24.dp.toPx()
             
-            withTransform({
-                translate(left = earOffset, top = h * 0.35f)
-                rotate(degrees = -finalEarRot, pivot = Offset(earW, earH/2))
-            }) {
+            withTransform({ translate(left = earOffset, top = h * 0.35f); rotate(degrees = -finalEarLeftRot, pivot = Offset(earW, earH/2)); scale(scaleX = 1f, scaleY = earLeftScale, pivot = Offset(earW, earH)) }) {
                 drawRoundRect(color = earColor, size = Size(earW, earH), cornerRadius = CornerRadius(earW/2, earW/2))
             }
-            withTransform({
-                translate(left = w - earOffset - earW, top = h * 0.35f)
-                rotate(degrees = finalEarRot, pivot = Offset(0f, earH/2))
-            }) {
+            withTransform({ translate(left = w - earOffset - earW, top = h * 0.35f); rotate(degrees = finalEarRightRot, pivot = Offset(0f, earH/2)) }) {
                 drawRoundRect(color = earColor, size = Size(earW, earH), cornerRadius = CornerRadius(earW/2, earW/2))
             }
         }
 
-        // Draw Body 
         Surface(
             modifier = Modifier.size(width = 280.dp, height = 300.dp),
             shape = RoundedCornerShape(80.dp),
@@ -445,39 +512,15 @@ fun AdvancedRobot(
             shadowElevation = 24.dp,
             border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFF0E5D8))
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxSize()
-            ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxSize()) {
                 Spacer(modifier = Modifier.height(16.dp))
-                // Face Screen
                 Box(
-                    modifier = Modifier
-                        .size(width = 248.dp, height = 200.dp)
-                        .background(
-                            brush = Brush.radialGradient(
-                                colors = listOf(Color(0xFF2A2A35), Color(0xFF0D0D12)),
-                                radius = 500f
-                            ),
-                            shape = RoundedCornerShape(70.dp)
-                        )
-                        .border(4.dp, Color(0xFF050505), RoundedCornerShape(70.dp))
+                    modifier = Modifier.size(width = 248.dp, height = 200.dp).background(Brush.radialGradient(colors = listOf(Color(0xFF2A2A35), Color(0xFF0D0D12)), radius = 500f), shape = RoundedCornerShape(70.dp)).border(4.dp, Color(0xFF050505), RoundedCornerShape(70.dp))
                 ) {
-                    RobotFaceCanvas(
-                        emotion = emotion,
-                        isBlinking = isBlinking,
-                        lookOffset = Offset(animLookX, animLookY),
-                        isNight = isNight,
-                        isNoon = isNoon
-                    )
+                    RobotFaceCanvas(emotion = emotion, isBlinking = isBlinking, lookOffset = Offset(animLookX, animLookY))
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                Icon(
-                    imageVector = Icons.Default.Favorite,
-                    contentDescription = "Heart",
-                    tint = Color(0xFFFF6B9D),
-                    modifier = Modifier.size(44.dp).scale(heartPulse)
-                )
+                Icon(imageVector = Icons.Default.Favorite, contentDescription = "Heart", tint = Color(0xFFFF6B9D), modifier = Modifier.size(44.dp).scale(heartPulse))
                 Spacer(modifier = Modifier.height(20.dp))
             }
         }
@@ -488,30 +531,22 @@ fun AdvancedRobot(
 fun RobotFaceCanvas(
     emotion: PetEmotion,
     isBlinking: Boolean,
-    lookOffset: Offset,
-    isNight: Boolean,
-    isNoon: Boolean
+    lookOffset: Offset
 ) {
     val featureColor = Color.White
     val cheekColor = Color(0xFFFF8B94)
     val pupilColor = Color(0xFF222222)
     
-    // Eating jaw animation
     val infiniteTransition = rememberInfiniteTransition()
     val eatingJaw by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = if (emotion == PetEmotion.EATING) 15f else 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        )
+        initialValue = 0f, targetValue = if (emotion == PetEmotion.EATING) 15f else 0f,
+        animationSpec = infiniteRepeatable(animation = tween(200, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse)
     )
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
         
-        // Cheeks
         val cheekY = h * 0.65f
         val cheekRx = 18.dp.toPx()
         val cheekRy = 10.dp.toPx()
@@ -524,7 +559,6 @@ fun RobotFaceCanvas(
             drawOval(color = cheekColor.copy(alpha = cheekAlpha), topLeft = Offset(rx - cheekRx, cheekY - cheekRy), size = Size(cheekRx * 2, cheekRy * 2))
         }
 
-        // Eyes
         val eyeY = h * 0.45f
         val eyeR = 26.dp.toPx()
         val strokeW = 10.dp.toPx()
@@ -572,30 +606,32 @@ fun RobotFaceCanvas(
                     drawCircle(pupilColor, eyeR * 0.5f, Offset(rx + 10.dp.toPx(), eyeY - 10.dp.toPx()))
                 }
                 PetEmotion.ERROR, PetEmotion.DIZZY -> {
-                    // Dizzy X eyes
                     drawLine(featureColor, Offset(lx - eyeR, eyeY - eyeR), Offset(lx + eyeR, eyeY + eyeR), strokeW, StrokeCap.Round)
                     drawLine(featureColor, Offset(lx - eyeR, eyeY + eyeR), Offset(lx + eyeR, eyeY - eyeR), strokeW, StrokeCap.Round)
                     drawLine(featureColor, Offset(rx - eyeR, eyeY - eyeR), Offset(rx + eyeR, eyeY + eyeR), strokeW, StrokeCap.Round)
                     drawLine(featureColor, Offset(rx - eyeR, eyeY + eyeR), Offset(rx + eyeR, eyeY - eyeR), strokeW, StrokeCap.Round)
                 }
                 PetEmotion.SNEEZING -> {
-                    // Nhắm tịt mũi nhỏ> <
                     drawLine(featureColor, Offset(lx - eyeR, eyeY - eyeR/2), Offset(lx + eyeR, eyeY + eyeR/2), strokeW, StrokeCap.Round)
                     drawLine(featureColor, Offset(lx - eyeR, eyeY + eyeR/2), Offset(lx + eyeR, eyeY - eyeR/2), strokeW, StrokeCap.Round)
-                    
                     drawLine(featureColor, Offset(rx - eyeR, eyeY - eyeR/2), Offset(rx + eyeR, eyeY + eyeR/2), strokeW, StrokeCap.Round)
                     drawLine(featureColor, Offset(rx - eyeR, eyeY + eyeR/2), Offset(rx + eyeR, eyeY - eyeR/2), strokeW, StrokeCap.Round)
                 }
                 else -> {
-                    // Normal / Listening / EATING
                     val currentR = if (emotion == PetEmotion.LISTENING) eyeR * 1.15f else eyeR
                     drawCircle(featureColor, currentR, Offset(lx, eyeY))
                     drawCircle(featureColor, currentR, Offset(rx, eyeY))
-                    
-                    // Clamp look offset dynamically up to inner bounds
                     val maxLook = currentR * 0.4f
-                    val lxLook = lookOffset.x.coerceIn(-maxLook, maxLook)
-                    val lyLook = lookOffset.y.coerceIn(-maxLook, maxLook)
+                    var lxLook = lookOffset.x.coerceIn(-maxLook, maxLook)
+                    var lyLook = lookOffset.y.coerceIn(-maxLook, maxLook)
+                    
+                    if (emotion == PetEmotion.PLAYING_PHONE) {
+                        lxLook = 0f
+                        lyLook = maxLook * 0.9f
+                    } else if (emotion == PetEmotion.EAVESDROPPING) {
+                        lxLook = -maxLook * 0.9f
+                        lyLook = 0f
+                    }
 
                     drawCircle(pupilColor, currentR * 0.5f, Offset(lx + lxLook, eyeY + lyLook))
                     drawCircle(pupilColor, currentR * 0.5f, Offset(rx + lxLook, eyeY + lyLook))
@@ -605,97 +641,44 @@ fun RobotFaceCanvas(
             }
         }
 
-        // Mouth
         val mouthY = h * 0.75f
         val mouthW = if (emotion == PetEmotion.SURPRISED) 24.dp.toPx() else 36.dp.toPx()
         val mouthX = w / 2f
         
         if (emotion == PetEmotion.SNEEZING) {
-            val path = Path().apply {
-                moveTo(mouthX - 10.dp.toPx(), mouthY + 10.dp.toPx())
-                lineTo(mouthX, mouthY)
-                lineTo(mouthX + 10.dp.toPx(), mouthY + 10.dp.toPx())
-            }
+            val path = Path().apply { moveTo(mouthX - 10.dp.toPx(), mouthY + 10.dp.toPx()); lineTo(mouthX, mouthY); lineTo(mouthX + 10.dp.toPx(), mouthY + 10.dp.toPx()) }
             drawPath(path, featureColor, style = Stroke(strokeW/2, cap = StrokeCap.Round))
         } else if (emotion == PetEmotion.EATING) {
-            // Nhai tóp tép
             drawOval(featureColor, Offset(mouthX - mouthW/2, mouthY - eatingJaw/2), Size(mouthW + eatingJaw, eatingJaw + 10.dp.toPx()))
-            
-            // Vẽ 1 viên năng lượng nhỏ (Battery) cạnh miệng
             drawRoundRect(Color(0xFF6BFF9D), Offset(mouthX + 40.dp.toPx(), mouthY - 10.dp.toPx()), Size(30.dp.toPx(), 20.dp.toPx()), CornerRadius(4.dp.toPx(), 4.dp.toPx()))
             drawRect(Color.White, Offset(mouthX + 70.dp.toPx(), mouthY - 4.dp.toPx()), Size(6.dp.toPx(), 8.dp.toPx()))
         } else {
             when (emotion) {
                 PetEmotion.HAPPY, PetEmotion.EXCITED, PetEmotion.LOVE -> {
-                    val path = Path().apply {
-                        moveTo(mouthX - mouthW/2, mouthY)
-                        quadraticTo(mouthX, mouthY + 16.dp.toPx(), mouthX + mouthW/2, mouthY)
-                    }
+                    val path = Path().apply { moveTo(mouthX - mouthW/2, mouthY); quadraticTo(mouthX, mouthY + 16.dp.toPx(), mouthX + mouthW/2, mouthY) }
                     drawPath(path, featureColor, style = Stroke(strokeW, cap = StrokeCap.Round))
                 }
                 PetEmotion.SAD, PetEmotion.ERROR, PetEmotion.DIZZY -> {
-                    val path = Path().apply {
-                        moveTo(mouthX - mouthW/2, mouthY + 10.dp.toPx())
-                        quadraticTo(mouthX, mouthY - 6.dp.toPx(), mouthX + mouthW/2, mouthY + 10.dp.toPx())
-                    }
+                    val path = Path().apply { moveTo(mouthX - mouthW/2, mouthY + 10.dp.toPx()); quadraticTo(mouthX, mouthY - 6.dp.toPx(), mouthX + mouthW/2, mouthY + 10.dp.toPx()) }
                     drawPath(path, featureColor, style = Stroke(strokeW, cap = StrokeCap.Round))
                 }
-                PetEmotion.SURPRISED -> {
-                    drawOval(featureColor, Offset(mouthX - mouthW/2, mouthY), Size(mouthW, mouthW * 1.5f))
-                }
-                PetEmotion.THINKING -> {
-                    drawLine(featureColor, Offset(mouthX - mouthW/2, mouthY), Offset(mouthX + mouthW/4, mouthY), strokeW, StrokeCap.Round)
-                }
-                PetEmotion.SLEEPY -> {
-                    drawOval(featureColor, Offset(mouthX - mouthW/4, mouthY), Size(mouthW/2, mouthW/2))
-                }
-                else -> {
-                    drawLine(featureColor, Offset(mouthX - mouthW/3, mouthY), Offset(mouthX + mouthW/3, mouthY), strokeW, StrokeCap.Round)
-                }
+                PetEmotion.SURPRISED -> drawOval(featureColor, Offset(mouthX - mouthW/2, mouthY), Size(mouthW, mouthW * 1.5f))
+                PetEmotion.THINKING -> drawLine(featureColor, Offset(mouthX - mouthW/2, mouthY), Offset(mouthX + mouthW/4, mouthY), strokeW, StrokeCap.Round)
+                PetEmotion.SLEEPY -> drawOval(featureColor, Offset(mouthX - mouthW/4, mouthY), Size(mouthW/2, mouthW/2))
+                else -> drawLine(featureColor, Offset(mouthX - mouthW/3, mouthY), Offset(mouthX + mouthW/3, mouthY), strokeW, StrokeCap.Round)
             }
         }
-        
-        // ------------- Phụ Kiện (Accessories) -------------
-        if (isNoon) {
-            // Vẽ Kính Râm (Thug life / Sunglasses) lúc trưa nắng
-            val glassY = eyeY - 20.dp.toPx()
-            val glassH = 50.dp.toPx()
+
+        if (emotion == PetEmotion.PLAYING_PHONE) {
+            val phoneW = 80.dp.toPx()
+            val phoneH = 50.dp.toPx()
+            val phoneY = h * 0.85f
+            // Vẽ màn hình hắt sáng cực quang
+            drawOval(Brush.radialGradient(listOf(Color(0x335588FF), Color.Transparent), center = Offset(w/2, h * 0.8f), radius = 150.dp.toPx()), Offset(w/2 - 150.dp.toPx(), h * 0.4f), Size(300.dp.toPx(), 300.dp.toPx()))
             
-            // Mắt kính trái và phải
-            val glassPath = Path().apply {
-                moveTo(lx - 40.dp.toPx(), glassY)
-                lineTo(lx + 30.dp.toPx(), glassY)
-                lineTo(lx + 20.dp.toPx(), glassY + glassH)
-                lineTo(lx - 30.dp.toPx(), glassY + glassH * 0.8f)
-                close()
-                
-                moveTo(rx - 30.dp.toPx(), glassY)
-                lineTo(rx + 40.dp.toPx(), glassY)
-                lineTo(rx + 30.dp.toPx(), glassY + glassH * 0.8f)
-                lineTo(rx - 20.dp.toPx(), glassY + glassH)
-                close()
-            }
-            drawPath(glassPath, Color(0xFF1E1E1E))
-            
-            // Gọng kính nối ngang
-            drawLine(Color(0xFF1E1E1E), Offset(lx + 25.dp.toPx(), glassY + 10.dp.toPx()), Offset(rx - 25.dp.toPx(), glassY + 10.dp.toPx()), 8.dp.toPx(), StrokeCap.Round)
-        }
-        
-        if (isNight && emotion == PetEmotion.SLEEPY) {
-            // Vẽ Mũ Lưỡi Trai Đi Ngủ (Night Cap) khi ngủ
-            val hatPath = Path().apply {
-                moveTo(w * 0.2f, 10.dp.toPx()) // Viền trái của mũ trên đỉnh đầu
-                quadraticTo(w * 0.5f, -30.dp.toPx(), w * 0.8f, 10.dp.toPx()) // Bo tròn qua phải
-                quadraticTo(w * 0.95f, 60.dp.toPx(), w * 0.85f, 100.dp.toPx()) // Chuôi mũ rủ xuống phải
-                lineTo(w * 0.75f, 95.dp.toPx())
-                quadraticTo(w * 0.85f, 40.dp.toPx(), w * 0.7f, 20.dp.toPx()) // Cong bóp vào
-                close()
-            }
-            drawPath(hatPath, Color(0xFF92B4FF))
-            // Chút bông mũ
-            drawCircle(Color.White, 16.dp.toPx(), Offset(w * 0.85f, 100.dp.toPx()))
-            // Vành mũ
-            drawRoundRect(Color.White, Offset(w * 0.15f, 10.dp.toPx()), Size(w * 0.7f, 24.dp.toPx()), CornerRadius(12.dp.toPx(), 12.dp.toPx()))
+            // Vẽ thân điện thoại
+            drawRoundRect(Color(0xFF222222), Offset(w/2 - phoneW/2, phoneY), Size(phoneW, phoneH), CornerRadius(10.dp.toPx(), 10.dp.toPx()))
+            drawRoundRect(Brush.verticalGradient(listOf(Color(0xFF88BBFF), Color(0xFF2255CC)), startY = phoneY, endY = phoneY + phoneH), Offset(w/2 - phoneW/2 + 4.dp.toPx(), phoneY + 4.dp.toPx()), Size(phoneW - 8.dp.toPx(), phoneH - 4.dp.toPx()), CornerRadius(6.dp.toPx(), 6.dp.toPx()))
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import android.content.Context
 import android.speech.tts.TextToSpeech
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -14,44 +15,41 @@ import java.util.Calendar
 import java.util.Locale
 
 enum class PetEmotion {
-    IDLE, HAPPY, SAD, SURPRISED, EXCITED, LISTENING, LOVE, THINKING, ERROR, SLEEPY, SNEEZING, DIZZY, EATING
+    IDLE, HAPPY, SAD, SURPRISED, EXCITED, LISTENING, LOVE, THINKING, ERROR, SLEEPY, SNEEZING, DIZZY, EATING, EAVESDROPPING, PLAYING_PHONE, DANCING
 }
 
 class VirtualPetViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val prefs = application.getSharedPreferences("PetbotSettings", Context.MODE_PRIVATE)
+
     private val _emotion = MutableStateFlow(PetEmotion.IDLE)
     val emotion: StateFlow<PetEmotion> = _emotion.asStateFlow()
+    
+    private val _sleepHour = MutableStateFlow(prefs.getInt("sleepHour", 22))
+    val sleepHour: StateFlow<Int> = _sleepHour.asStateFlow()
 
-    // Giữ lại các StateFlow ảo để MainActivity biên dịch được nhưng không dùng tới
+    private val _wakeHour = MutableStateFlow(prefs.getInt("wakeHour", 6))
+    val wakeHour: StateFlow<Int> = _wakeHour.asStateFlow()
+
+    private val _customReminder = MutableStateFlow(prefs.getString("customReminder", "Vươn vai chào ngày mới nào!") ?: "")
+    val customReminder: StateFlow<String> = _customReminder.asStateFlow()
+
+    private val _petName = MutableStateFlow(prefs.getString("petName", "Bé Pet") ?: "Bé Pet")
+    val petName: StateFlow<String> = _petName.asStateFlow()
+
+    private val _isMuteIdleSounds = MutableStateFlow(prefs.getBoolean("isMuteIdleSounds", false))
+    val isMuteIdleSounds: StateFlow<Boolean> = _isMuteIdleSounds.asStateFlow()
+
+    private val _isDeepNightMode = MutableStateFlow(false)
+    val isDeepNightMode: StateFlow<Boolean> = _isDeepNightMode.asStateFlow()
+
+    // Cũ
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
-
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
-
     private val _chatLog = MutableStateFlow<List<String>>(emptyList())
     val chatLog: StateFlow<List<String>> = _chatLog.asStateFlow()
-
-    private val _partialSpeechText = MutableStateFlow("")
-    val partialSpeechText: StateFlow<String> = _partialSpeechText.asStateFlow()
-
-    private val _aiName = MutableStateFlow("Bot")
-    val aiName: StateFlow<String> = _aiName.asStateFlow()
-
-    private val _voiceType = MutableStateFlow("Robot")
-    val voiceType: StateFlow<String> = _voiceType.asStateFlow()
-
-    private val _personalityType = MutableStateFlow("Vô tri")
-    val personalityType: StateFlow<String> = _personalityType.asStateFlow()
-
-    private val _customPrompt = MutableStateFlow("")
-    val customPrompt: StateFlow<String> = _customPrompt.asStateFlow()
-
-    private val _isWakeWordMode = MutableStateFlow(false)
-    val isWakeWordMode: StateFlow<Boolean> = _isWakeWordMode.asStateFlow()
-
-    private val _isHandsFreeMode = MutableStateFlow(false)
-    val isHandsFreeMode: StateFlow<Boolean> = _isHandsFreeMode.asStateFlow()
 
     private var behaviorJob: kotlinx.coroutines.Job? = null
     private var lastInteractionTime = System.currentTimeMillis()
@@ -63,12 +61,11 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     private var tts: TextToSpeech? = null
 
     init {
-        // Khởi tạo TextToSpeech cục bộ tạo âm thanh minion/robot siêu kute
         tts = TextToSpeech(application) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("vi", "VN")
-                tts?.setPitch(2.0f) // Giọng siêu cao thẻo như minion
-                tts?.setSpeechRate(1.6f) // Nói siêu nhanh líu lo
+                tts?.setPitch(2.0f)
+                tts?.setSpeechRate(1.6f)
             }
         }
         startIdleBehavior()
@@ -80,8 +77,30 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         tts?.shutdown()
     }
 
+    fun saveConfig(sleepH: Int, wakeH: Int, reminder: String, name: String, mute: Boolean) {
+        prefs.edit().apply {
+            putInt("sleepHour", sleepH)
+            putInt("wakeHour", wakeH)
+            putString("customReminder", reminder)
+            putString("petName", name)
+            putBoolean("isMuteIdleSounds", mute)
+        }.apply()
+        
+        _sleepHour.value = sleepH
+        _wakeHour.value = wakeH
+        _customReminder.value = reminder
+        _petName.value = name
+        _isMuteIdleSounds.value = mute
+        
+        // Reset announcement flags on save if needed
+        hasAnnouncedMorning = false
+        hasAnnouncedNight = false
+    }
+
     private fun playSound(texts: List<String>) {
-        tts?.speak(texts.random(), TextToSpeech.QUEUE_FLUSH, null, null)
+        if (!_isMuteIdleSounds.value) {
+            tts?.speak(texts.random(), TextToSpeech.QUEUE_FLUSH, null, null)
+        }
     }
 
     private fun startIdleBehavior() {
@@ -94,41 +113,56 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                 val calendar = Calendar.getInstance()
                 val hour = calendar.get(Calendar.HOUR_OF_DAY)
                 val minute = calendar.get(Calendar.MINUTE)
-                val isNight = hour >= 21 || hour < 6 // Lùi giờ ngủ xuống 21h
                 
+                val sHour = _sleepHour.value
+                val wHour = _wakeHour.value
+                val isNight = if (sHour > wHour) {
+                    hour >= sHour || hour < wHour
+                } else {
+                    hour in sHour until wHour
+                }
+                
+                _isDeepNightMode.value = isNight
+
                 // Routine Announcer Logic
-                if (hour == 6 && minute == 0 && !hasAnnouncedMorning) {
+                if (hour == wHour && minute == 0 && !hasAnnouncedMorning) {
                     hasAnnouncedMorning = true
-                    hasAnnouncedNight = false // reset for night
+                    hasAnnouncedNight = false
                     _emotion.value = PetEmotion.EXCITED
-                    tts?.speak("Ò ó o... 6 giờ sáng rồi, dậy đi mọi người ơi, vươn vai chào ngày mới nào!", TextToSpeech.QUEUE_FLUSH, null, null)
+                    // Lời báo thức k bắt buộc bị mute
+                    val n = _petName.value
+                    val rm = _customReminder.value
+                    tts?.speak("Ò ó o... tới giờ rồi, mình là $n đây! $rm", TextToSpeech.QUEUE_FLUSH, null, null)
                     markInteraction()
                     restartBehaviorTimer(10000)
                     continue
                 }
                 
-                if (hour == 21 && minute == 0 && !hasAnnouncedNight) {
+                if (hour == sHour && minute == 0 && !hasAnnouncedNight) {
                     hasAnnouncedNight = true
-                    hasAnnouncedMorning = false // reset for morning
+                    hasAnnouncedMorning = false
                     _emotion.value = PetEmotion.SLEEPY
-                    tts?.speak("9 giờ tối rồi, các bạn đi ngủ sớm cho khỏe nha. Nhớ đắp mền kẻo lạnh xì trum, chúc ngủ ngon!", TextToSpeech.QUEUE_FLUSH, null, null)
+                    val n = _petName.value
+                    tts?.speak("$sHour giờ tối rồi, đi ngủ sớm cho khỏe nha. Nhớ đắp mền kẻo lạnh xì trum, $n chúc bạn ngủ ngon!", TextToSpeech.QUEUE_FLUSH, null, null)
                     markInteraction()
                     restartBehaviorTimer(10000)
                     continue
                 }
 
-                // Giờ ăn (7h, 12h, 19h)
-                val isMealTime = (hour == 7 || hour == 12 || hour == 19)
-                if (isMealTime && minute == 0 && !isMealTimeAnnounced) {
-                    isMealTimeAnnounced = true
-                    _emotion.value = PetEmotion.EATING
-                    tts?.speak("Đến giờ ăn rồi! Măm măm măm, chóp chép ngon quá!", TextToSpeech.QUEUE_FLUSH, null, null)
-                    markInteraction()
-                    restartBehaviorTimer(15000)
-                    continue
-                }
-                if (!isMealTime && minute > 0) {
-                    isMealTimeAnnounced = false
+                if (!isNight) {
+                    // Giờ ăn (7h, 12h, 19h)
+                    val isMealTime = (hour == 7 || hour == 12 || hour == 19)
+                    if (isMealTime && minute == 0 && !isMealTimeAnnounced) {
+                        isMealTimeAnnounced = true
+                        _emotion.value = PetEmotion.EATING
+                        tts?.speak("Đến giờ ăn rồi! Măm măm măm, chóp chép ngon quá!", TextToSpeech.QUEUE_FLUSH, null, null)
+                        markInteraction()
+                        restartBehaviorTimer(15000)
+                        continue
+                    }
+                    if (!isMealTime && minute > 0) {
+                        isMealTimeAnnounced = false
+                    }
                 }
 
                 // Trạng thái vô tri: Nếu 5 giây không ai đụng vào
@@ -136,11 +170,6 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                     if (isNight) {
                         if (_emotion.value != PetEmotion.SLEEPY) {
                             _emotion.value = PetEmotion.SLEEPY
-                        }
-                        if (Math.random() > 0.95) {
-                            tts?.setPitch(0.5f) // Ngáy trầm
-                            playSound(listOf("Khò... khò...", "Zzz zzz..."))
-                            tts?.setPitch(2.0f) 
                         }
                     } else {
                         // Ban ngày thi thoảng vô tri
@@ -150,18 +179,38 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                                 PetEmotion.THINKING, PetEmotion.IDLE
                             ).random()
 
-                            // 5% tỷ lệ hắt xì ngẫu nhiên
-                            if (Math.random() > 0.95) {
+                            val randVal = Math.random()
+                            if (randVal > 0.96) {
                                 nextEmotion = PetEmotion.SNEEZING
                                 playSound(listOf("Hắt xì... ui ướt hết màn hình!", "Ắt xì", "Sụt sịt... lạnh quá"))
                                 _emotion.value = nextEmotion
                                 restartBehaviorTimer(3000)
                                 continue
+                            } else if (randVal > 0.92) {
+                                nextEmotion = PetEmotion.DANCING
+                                playSound(listOf("Ít sà Vinahao!", "Lên nóc nhà là bắt con gà!", "Tùng tùng chát chát... quẩy lên"))
+                                _emotion.value = nextEmotion
+                                restartBehaviorTimer(5000)
+                                continue
+                            } else if (randVal > 0.88) {
+                                nextEmotion = PetEmotion.EAVESDROPPING
+                                _emotion.value = nextEmotion
+                                // Cho cái tai ngoe nguẩy 1 giây mới bắt đầu thì thào
+                                delay(1000)
+                                playSound(listOf("Có biến gì thế...", "Đang nói xấu mình hở...", "Ai kêu tui đó..."))
+                                restartBehaviorTimer(4000)
+                                continue
+                            } else if (randVal > 0.84) {
+                                nextEmotion = PetEmotion.PLAYING_PHONE
+                                playSound(listOf("Lướt tóp tóp... hehe", "Video này hài xỉu", "Xem cờ nhíp tí"))
+                                _emotion.value = nextEmotion
+                                restartBehaviorTimer(6000)
+                                continue
                             }
 
                             _emotion.value = nextEmotion
 
-                            if (Math.random() > 0.9) {
+                            if (Math.random() > 0.8) {
                                 val sillySounds = when (nextEmotion) {
                                     PetEmotion.HAPPY -> listOf("La la la", "Vê lốc đê", "Tê ga tê ga", "Ha ha ha")
                                     PetEmotion.THINKING -> listOf("Ủa...", "Hừm...", "Khó hiểu ghê", "Nà ní")
@@ -181,27 +230,31 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun onShake() {
+        if (_isDeepNightMode.value) return
         markInteraction()
-        _emotion.value = PetEmotion.DIZZY // Lắc mạnh thì DIZZY thay vì chỉ Surprised
+        _emotion.value = PetEmotion.DIZZY
         playSound(listOf("Chóng mặt quá... chóng mặt quá", "Ối giời ôi", "Động đất à"))
         restartBehaviorTimer()
     }
 
-    fun pet() { // vuốt ve / quẹt
+    fun pet() {
+        if (_isDeepNightMode.value) return
         markInteraction()
         _emotion.value = PetEmotion.EXCITED
         playSound(listOf("Meo meo", "Đỉnh chóp", "Khoái khoái", "Tuyệt vời"))
         restartBehaviorTimer()
     }
     
-    fun poke() { // chạm vào
+    fun poke() {
+        if (_isDeepNightMode.value) return
         markInteraction()
         _emotion.value = PetEmotion.LOVE
         playSound(listOf("Á á", "Nhột quá đi", "Thích bạn nhứt", "Trái tim", "Chụt chụt"))
         restartBehaviorTimer()
     }
 
-    fun doubleTap() { // gõ 2 lần để ăn
+    fun doubleTap() {
+        if (_isDeepNightMode.value) return
         markInteraction()
         _emotion.value = PetEmotion.EATING
         playSound(listOf("Măm măm", "Ngon tuyệt cú mèo", "Chóp chép chóp chép"))
@@ -219,5 +272,4 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
 
     fun startListening() { poke() } 
     fun stopListening() {}
-    fun updateSettings(n: String, v: String, p: String, c: String, w: Boolean, h: Boolean) {}
 }
