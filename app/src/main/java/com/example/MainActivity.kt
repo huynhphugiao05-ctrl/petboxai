@@ -289,16 +289,32 @@ fun VirtualPetScreen(
     modifier: Modifier = Modifier, 
     viewModel: VirtualPetViewModel
 ) {
-    val speechRecognizerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            val data = result.data
-            val results = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
-            val spokenText = results?.get(0)
-            if (spokenText != null) {
-                viewModel.processVoiceCommand(spokenText)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val speechRecognizer = remember { android.speech.SpeechRecognizer.createSpeechRecognizer(context) }
+    var isListening by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        val listener = object : android.speech.RecognitionListener {
+            override fun onReadyForSpeech(params: android.os.Bundle?) { isListening = true }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() { isListening = false }
+            override fun onError(error: Int) { isListening = false }
+            override fun onResults(results: android.os.Bundle?) {
+                isListening = false
+                val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                val spokenText = matches?.getOrNull(0)
+                if (spokenText != null) {
+                    viewModel.processVoiceCommand(spokenText)
+                }
             }
+            override fun onPartialResults(partialResults: android.os.Bundle?) {}
+            override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+        }
+        speechRecognizer.setRecognitionListener(listener)
+        onDispose {
+            speechRecognizer.destroy()
         }
     }
 
@@ -436,10 +452,9 @@ fun VirtualPetScreen(
                             val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                                 putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                                 putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "vi-VN")
-                                putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Đọc khẩu lệnh cho Pet...")
                             }
                             try {
-                                speechRecognizerLauncher.launch(intent)
+                                speechRecognizer.startListening(intent)
                             } catch (e: Exception) {}
                         },
                         onPet = { viewModel.pet() }
@@ -452,6 +467,13 @@ fun VirtualPetScreen(
                 modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
             ) {
                 Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.Gray)
+            }
+            if (isListening) {
+                Text(
+                    text = "Đang nghe khẩu lệnh...",
+                    color = Color.LightGray,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)
+                )
             }
         }
     }
