@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -116,12 +117,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class ZzzParticle(
+enum class PetParticleType { ZZZ, HEART, TEAR }
+data class PetParticle(
     val id: Int,
     var x: Float,
     var y: Float,
     var alpha: Float,
-    val size: Float
+    val size: Float,
+    val type: PetParticleType = PetParticleType.ZZZ
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -130,27 +133,48 @@ fun SettingsDialog(
     viewModel: VirtualPetViewModel,
     onDismiss: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    DisposableEffect(Unit) {
+        val activity = context as? android.app.Activity
+        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onDispose {
+            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+    }
+
     val sleepHour by viewModel.sleepHour.collectAsState()
     val wakeHour by viewModel.wakeHour.collectAsState()
     val customReminder by viewModel.customReminder.collectAsState()
     val petName by viewModel.petName.collectAsState()
     val isMuteIdleSounds by viewModel.isMuteIdleSounds.collectAsState()
+    val customTasksList by viewModel.customTasks.collectAsState()
 
     var inputSleep by remember { mutableStateOf(sleepHour.toString()) }
     var inputWake by remember { mutableStateOf(wakeHour.toString()) }
     var inputReminder by remember { mutableStateOf(customReminder) }
     var inputName by remember { mutableStateOf(petName) }
     var inputMute by remember { mutableStateOf(isMuteIdleSounds) }
+    
+    val editTasks = remember { mutableStateListOf<CustomTask>().apply { addAll(customTasksList) } }
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        ),
+        modifier = Modifier.fillMaxWidth(0.9f).padding(WindowInsets.ime.asPaddingValues()),
         title = { Text("Quản gia Petbot") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
                     value = inputName,
                     onValueChange = { inputName = it },
-                    label = { Text("Tên gọi của Pet") },
+                    label = { Text("Tên Pet") },
                     singleLine = true
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -158,25 +182,81 @@ fun SettingsDialog(
                         modifier = Modifier.weight(1f),
                         value = inputSleep,
                         onValueChange = { inputSleep = it },
-                        label = { Text("Giờ đi ngủ (0-23)") },
+                        label = { Text("Giờ ngủ") },
                         singleLine = true
                     )
                     OutlinedTextField(
                         modifier = Modifier.weight(1f),
                         value = inputWake,
                         onValueChange = { inputWake = it },
-                        label = { Text("Giờ báo thức (0-23)") },
+                        label = { Text("Giờ thức") },
                         singleLine = true
                     )
                 }
                 OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
                     value = inputReminder,
                     onValueChange = { inputReminder = it },
-                    label = { Text("Lời nhắc báo thức") }
+                    label = { Text("Lời nhắc báo thức") },
+                    singleLine = true
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = inputMute, onCheckedChange = { inputMute = it })
-                    Text("Tắt âm thanh vô tri ban ngày (Cần tập trung)")
+                    Text("Tắt vô tri ban ngày", fontSize = 14.sp)
+                }
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                
+                Text("Nhắc việc tùy chỉnh (${editTasks.size}/5)", style = MaterialTheme.typography.titleMedium)
+                editTasks.forEachIndexed { index, task ->
+                    Surface(
+                        color = Color(0xFFF5F5F5),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth() // Nested rows
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    modifier = Modifier.weight(0.4f),
+                                    value = task.time,
+                                    onValueChange = { editTasks[index] = task.copy(time = it) },
+                                    label = { Text("Giờ") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    modifier = Modifier.weight(0.6f),
+                                    value = task.repeatCount.toString(),
+                                    onValueChange = { 
+                                        val newCount = it.toIntOrNull()
+                                        if (newCount != null) {
+                                            editTasks[index] = task.copy(repeatCount = newCount) 
+                                        }
+                                    },
+                                    label = { Text("Lặp lại (lần)") },
+                                    singleLine = true
+                                )
+                                IconButton(onClick = { editTasks.removeAt(index) }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Xóa", tint = Color.Red)
+                                }
+                            }
+                            OutlinedTextField(
+                                modifier = Modifier.fillMaxWidth(),
+                                value = task.content,
+                                onValueChange = { editTasks[index] = task.copy(content = it) },
+                                label = { Text("Nội dung lời nhắc") },
+                                singleLine = true
+                            )
+                        }
+                    }
+                }
+                if (editTasks.size < 5) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { editTasks.add(CustomTask()) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                    ) {
+                        Text("+ Thêm hẹn giờ mới")
+                    }
                 }
             }
         },
@@ -191,13 +271,14 @@ fun SettingsDialog(
                     name = inputName,
                     mute = inputMute
                 )
+                viewModel.saveTasks(editTasks.toList())
                 onDismiss()
             }) {
-                Text("Lưu cấu hình")
+                Text("Lưu cài đặt")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Hủy") }
+            TextButton(onClick = onDismiss) { Text("Đóng") }
         }
     )
 }
@@ -207,6 +288,19 @@ fun VirtualPetScreen(
     modifier: Modifier = Modifier, 
     viewModel: VirtualPetViewModel
 ) {
+    val speechRecognizerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val data = result.data
+            val results = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+            val spokenText = results?.get(0)
+            if (spokenText != null) {
+                viewModel.processVoiceCommand(spokenText)
+            }
+        }
+    }
+
     val emotion by viewModel.emotion.collectAsState()
     val isDeepNightMode by viewModel.isDeepNightMode.collectAsState()
 
@@ -215,7 +309,7 @@ fun VirtualPetScreen(
     
     var showSettings by remember { mutableStateOf(false) }
 
-    val particles = remember { mutableStateListOf<ZzzParticle>() }
+    val particles = remember { mutableStateListOf<PetParticle>() }
 
     LaunchedEffect(Unit) {
         var pId = 0
@@ -224,29 +318,28 @@ fun VirtualPetScreen(
             currentTime = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(date)
             currentDate = java.text.SimpleDateFormat("EEEE, dd/MM/yyyy", java.util.Locale("vi", "VN")).format(date)
             
-            val calendar = Calendar.getInstance()
-            val hour = calendar.get(Calendar.HOUR_OF_DAY)
-            
             if (emotion == PetEmotion.SLEEPY && !isDeepNightMode) {
                 if (Random.nextFloat() > 0.6f) {
-                    particles.add(
-                        ZzzParticle(
-                            id = pId++,
-                            x = Random.nextFloat() * 200 - 100,
-                            y = 0f,
-                            alpha = 1f,
-                            size = Random.nextFloat() * 10 + 20f
-                        )
-                    )
+                    particles.add(PetParticle(id = pId++, x = Random.nextFloat() * 200 - 100, y = 0f, alpha = 1f, size = Random.nextFloat() * 10 + 20f, type = PetParticleType.ZZZ))
+                }
+            } else if (emotion == PetEmotion.LOVE) {
+                if (Random.nextFloat() > 0.4f) {
+                    particles.add(PetParticle(id = pId++, x = Random.nextFloat() * 300 - 150, y = 100f, alpha = 1f, size = Random.nextFloat() * 20 + 20f, type = PetParticleType.HEART))
+                }
+            } else if (emotion == PetEmotion.SAD || emotion == PetEmotion.SNEEZING) {
+                if (Random.nextFloat() > 0.3f) {
+                    particles.add(PetParticle(id = pId++, x = Random.nextFloat() * 200 - 100, y = -50f, alpha = 1f, size = Random.nextFloat() * 10 + 15f, type = PetParticleType.TEAR))
                 }
             }
             
             val iterator = particles.iterator()
             while (iterator.hasNext()) {
                 val p = iterator.next()
-                p.y -= 5f
-                p.x += (Math.sin(p.y / 20.0).toFloat() * 3f)
-                p.alpha -= 0.02f
+                when (p.type) {
+                    PetParticleType.ZZZ -> { p.y -= 5f; p.x += (Math.sin(p.y / 20.0).toFloat() * 3f); p.alpha -= 0.02f }
+                    PetParticleType.HEART -> { p.y -= 8f; p.x += (Math.sin(p.y / 15.0).toFloat() * 4f); p.alpha -= 0.03f }
+                    PetParticleType.TEAR -> { p.y += 10f; p.alpha -= 0.04f }
+                }
                 if (p.alpha <= 0f) {
                     iterator.remove()
                 }
@@ -323,13 +416,13 @@ fun VirtualPetScreen(
                         val cy = size.height / 2 - 100.dp.toPx()
                         for (p in particles) {
                             try {
-                                drawContext.canvas.nativeCanvas.drawText(
-                                    "Zzz", cx + p.x, cy + p.y,
-                                    android.graphics.Paint().apply {
-                                        color = android.graphics.Color.argb((p.alpha * 255).toInt(), 200, 200, 255)
-                                        textSize = p.size.dp.toPx()
-                                    }
-                                )
+                                if (p.type == PetParticleType.ZZZ) {
+                                    drawContext.canvas.nativeCanvas.drawText("Zzz", cx + p.x, cy + p.y, android.graphics.Paint().apply { color = android.graphics.Color.argb((p.alpha * 255).toInt(), 200, 200, 255); textSize = p.size.dp.toPx() })
+                                } else if (p.type == PetParticleType.HEART) {
+                                    drawContext.canvas.nativeCanvas.drawText("❤", cx + p.x, cy + p.y, android.graphics.Paint().apply { color = android.graphics.Color.argb((p.alpha * 255).toInt(), 255, 120, 150); textSize = p.size.dp.toPx() })
+                                } else if (p.type == PetParticleType.TEAR) {
+                                    drawContext.canvas.nativeCanvas.drawText("💧", cx + p.x, cy + p.y, android.graphics.Paint().apply { color = android.graphics.Color.argb((p.alpha * 255).toInt(), 120, 200, 255); textSize = p.size.dp.toPx() })
+                                }
                             } catch (e: Exception) {}
                         }
                     }
@@ -338,6 +431,16 @@ fun VirtualPetScreen(
                         emotion = emotion,
                         onTap = { viewModel.poke() },
                         onDoubleTap = { viewModel.doubleTap() },
+                        onLongPress = {
+                            val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "vi-VN")
+                                putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Đọc khẩu lệnh cho Pet...")
+                            }
+                            try {
+                                speechRecognizerLauncher.launch(intent)
+                            } catch (e: Exception) {}
+                        },
                         onPet = { viewModel.pet() }
                     )
                 }
@@ -358,6 +461,7 @@ fun AdvancedRobot(
     emotion: PetEmotion,
     onTap: () -> Unit,
     onDoubleTap: () -> Unit,
+    onLongPress: () -> Unit,
     onPet: () -> Unit
 ) {
     val infiniteTransition = rememberInfiniteTransition()
@@ -469,7 +573,7 @@ fun AdvancedRobot(
             .size(340.dp)
             .offset(x = animWalkOffset.dp + animShakeX.dp, y = floatAnim.dp + animShakeY.dp)
             .scale(danceScale)
-            .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }, onDoubleTap = { onDoubleTap() }) }
+            .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }, onDoubleTap = { onDoubleTap() }, onLongPress = { onLongPress() }) }
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { offset -> touchPos = Offset(offset.x / 10 - 15f, offset.y / 10 - 15f) },
@@ -560,13 +664,35 @@ fun RobotFaceCanvas(
             drawLine(featureColor, Offset(rx - eyeR, eyeY), Offset(rx + eyeR, eyeY), strokeW, StrokeCap.Round)
         } else {
             when (emotion) {
-                PetEmotion.HAPPY, PetEmotion.EXCITED -> {
+                PetEmotion.HAPPY -> {
                     drawArc(featureColor, 180f, 180f, false, Offset(lx - eyeR, eyeY - eyeR), Size(eyeR*2, eyeR*2), style = Stroke(strokeW, cap = StrokeCap.Round))
                     drawArc(featureColor, 180f, 180f, false, Offset(rx - eyeR, eyeY - eyeR), Size(eyeR*2, eyeR*2), style = Stroke(strokeW, cap = StrokeCap.Round))
+                }
+                PetEmotion.EXCITED -> {
+                    val drawStar = { center: Offset ->
+                        val path = Path().apply {
+                            val outR = eyeR * 1.5f
+                            val inR = eyeR * 0.6f
+                            moveTo(center.x, center.y - outR)
+                            for (i in 1..9) {
+                                val radius = if (i % 2 == 0) outR else inR
+                                val angle = Math.PI / 2.0 - i * Math.PI / 5.0
+                                lineTo(center.x + (kotlin.math.cos(angle) * radius).toFloat(), center.y - (kotlin.math.sin(angle) * radius).toFloat())
+                            }
+                            close()
+                        }
+                        drawPath(path, featureColor, style = Stroke(strokeW / 2, cap = StrokeCap.Round))
+                    }
+                    drawStar(Offset(lx, eyeY))
+                    drawStar(Offset(rx, eyeY))
                 }
                 PetEmotion.SAD -> {
                     drawLine(featureColor, Offset(lx - eyeR, eyeY - eyeR/4), Offset(lx + eyeR, eyeY + eyeR/2), strokeW, StrokeCap.Round)
                     drawLine(featureColor, Offset(rx - eyeR, eyeY + eyeR/2), Offset(rx + eyeR, eyeY - eyeR/4), strokeW, StrokeCap.Round)
+                    val tearPath = Path().apply { moveTo(lx, eyeY + eyeR); quadraticTo(lx + 8.dp.toPx(), eyeY + eyeR + 15.dp.toPx(), lx, eyeY + eyeR + 30.dp.toPx()); quadraticTo(lx - 8.dp.toPx(), eyeY + eyeR + 15.dp.toPx(), lx, eyeY + eyeR) }
+                    drawPath(tearPath, Color(0xFF88CCFF))
+                    val tearPath2 = Path().apply { moveTo(rx, eyeY + eyeR); quadraticTo(rx + 8.dp.toPx(), eyeY + eyeR + 15.dp.toPx(), rx, eyeY + eyeR + 30.dp.toPx()); quadraticTo(rx - 8.dp.toPx(), eyeY + eyeR + 15.dp.toPx(), rx, eyeY + eyeR) }
+                    drawPath(tearPath2, Color(0xFF88CCFF))
                 }
                 PetEmotion.SLEEPY -> {
                     drawLine(featureColor, Offset(lx - eyeR, eyeY), Offset(lx + eyeR, eyeY), strokeW, StrokeCap.Round)

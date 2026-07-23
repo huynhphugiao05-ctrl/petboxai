@@ -13,6 +13,34 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class CustomTask(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    var time: String = "12:00",
+    var content: String = "",
+    var repeatCount: Int = 1
+) {
+    fun toJson(): JSONObject {
+        val o = JSONObject()
+        o.put("id", id)
+        o.put("time", time)
+        o.put("content", content)
+        o.put("repeatCount", repeatCount)
+        return o
+    }
+    companion object {
+        fun fromJson(o: JSONObject): CustomTask {
+            return CustomTask(
+                id = o.optString("id", java.util.UUID.randomUUID().toString()),
+                time = o.optString("time", "12:00"),
+                content = o.optString("content", ""),
+                repeatCount = o.optInt("repeatCount", 1)
+            )
+        }
+    }
+}
 
 enum class PetEmotion {
     IDLE, HAPPY, SAD, SURPRISED, EXCITED, LISTENING, LOVE, THINKING, ERROR, SLEEPY, SNEEZING, DIZZY, EATING, EAVESDROPPING, PLAYING_PHONE, DANCING
@@ -42,6 +70,9 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _isDeepNightMode = MutableStateFlow(false)
     val isDeepNightMode: StateFlow<Boolean> = _isDeepNightMode.asStateFlow()
+    
+    private val _customTasks = MutableStateFlow<List<CustomTask>>(emptyList())
+    val customTasks: StateFlow<List<CustomTask>> = _customTasks.asStateFlow()
 
     // Cũ
     private val _isListening = MutableStateFlow(false)
@@ -57,15 +88,26 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     private var hasAnnouncedMorning = false
     private var hasAnnouncedNight = false
     private var isMealTimeAnnounced = false
+    
+    private val announcedTasks = mutableSetOf<String>()
 
     private var tts: TextToSpeech? = null
 
     init {
+        val tasksStr = prefs.getString("customTasks", "[]") ?: "[]"
+        try {
+            val arr = JSONArray(tasksStr)
+            val list = mutableListOf<CustomTask>()
+            for (i in 0 until arr.length()) {
+                list.add(CustomTask.fromJson(arr.getJSONObject(i)))
+            }
+            _customTasks.value = list
+        } catch (e: Exception) { e.printStackTrace() }
         tts = TextToSpeech(application) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("vi", "VN")
-                tts?.setPitch(2.0f)
-                tts?.setSpeechRate(1.6f)
+                tts?.setPitch(1.0f)
+                tts?.setSpeechRate(1.0f)
             }
         }
         startIdleBehavior()
@@ -95,6 +137,14 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         // Reset announcement flags on save if needed
         hasAnnouncedMorning = false
         hasAnnouncedNight = false
+    }
+
+    fun saveTasks(tasks: List<CustomTask>) {
+        val arr = JSONArray()
+        tasks.forEach { arr.put(it.toJson()) }
+        prefs.edit().putString("customTasks", arr.toString()).apply()
+        _customTasks.value = tasks
+        announcedTasks.clear() // re-announce if time modified and matches current
     }
 
     private fun playSound(texts: List<String>) {
@@ -135,6 +185,24 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
                     tts?.speak("Ò ó o... tới giờ rồi, mình là $n đây! $rm", TextToSpeech.QUEUE_FLUSH, null, null)
                     markInteraction()
                     restartBehaviorTimer(10000)
+                    continue
+                }
+                
+                val timeStr = String.format("%02d:%02d", hour, minute)
+                if (hour == 0 && minute == 0) announcedTasks.clear()
+                
+                val activeTask = _customTasks.value.find { it.time == timeStr && !announcedTasks.contains(it.id) }
+                if (activeTask != null) {
+                    announcedTasks.add(activeTask.id)
+                    _emotion.value = PetEmotion.EXCITED
+                    markInteraction()
+                    viewModelScope.launch {
+                        for (i in 0 until activeTask.repeatCount) {
+                            tts?.speak(activeTask.content, TextToSpeech.QUEUE_ADD, null, null)
+                            delay(10000)
+                        }
+                        restartBehaviorTimer(3000)
+                    }
                     continue
                 }
                 
@@ -229,8 +297,16 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
         lastInteractionTime = System.currentTimeMillis()
     }
 
+    private fun wakeUpReaction() {
+        if (_emotion.value != PetEmotion.SAD && _emotion.value != PetEmotion.SNEEZING) {
+            _emotion.value = PetEmotion.SAD
+            playSound(listOf("Gì vậy, cất tay đi...", "Cho người ta ngủ xíu đi", "Đang ngủ mà...", "Ngái ngủ quá"))
+            restartBehaviorTimer(4000)
+        }
+    }
+
     fun onShake() {
-        if (_isDeepNightMode.value) return
+        if (_isDeepNightMode.value) { wakeUpReaction(); return }
         markInteraction()
         _emotion.value = PetEmotion.DIZZY
         playSound(listOf("Chóng mặt quá... chóng mặt quá", "Ối giời ôi", "Động đất à"))
@@ -238,7 +314,7 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun pet() {
-        if (_isDeepNightMode.value) return
+        if (_isDeepNightMode.value) { wakeUpReaction(); return }
         markInteraction()
         _emotion.value = PetEmotion.EXCITED
         playSound(listOf("Meo meo", "Đỉnh chóp", "Khoái khoái", "Tuyệt vời"))
@@ -246,7 +322,7 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     }
     
     fun poke() {
-        if (_isDeepNightMode.value) return
+        if (_isDeepNightMode.value) { wakeUpReaction(); return }
         markInteraction()
         _emotion.value = PetEmotion.LOVE
         playSound(listOf("Á á", "Nhột quá đi", "Thích bạn nhứt", "Trái tim", "Chụt chụt"))
@@ -254,11 +330,41 @@ class VirtualPetViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun doubleTap() {
-        if (_isDeepNightMode.value) return
+        if (_isDeepNightMode.value) { wakeUpReaction(); return }
         markInteraction()
         _emotion.value = PetEmotion.EATING
         playSound(listOf("Măm măm", "Ngon tuyệt cú mèo", "Chóp chép chóp chép"))
         restartBehaviorTimer(5000)
+    }
+
+    fun processVoiceCommand(command: String) {
+        val lower = command.lowercase(Locale("vi", "VN"))
+        markInteraction()
+        if (lower.contains("múa") || lower.contains("nhảy") || lower.contains("dance")) {
+            _emotion.value = PetEmotion.DANCING
+            playSound(listOf("Quẩy lên nào!", "Lên nóc nhà luôn"))
+            restartBehaviorTimer(6000)
+        } else if (lower.contains("ngủ") || lower.contains("mệt")) {
+            _emotion.value = PetEmotion.SLEEPY
+            playSound(listOf("Ngáp ngáp... ngủ đây", "Nhớ kéo mền dùm mình nha"))
+            restartBehaviorTimer(5000)
+        } else if (lower.contains("ăn") || lower.contains("đói") || lower.contains("uống")) {
+            _emotion.value = PetEmotion.EATING
+            playSound(listOf("Ngon quá măm măm!", "Cảm ơn nhen măm măm"))
+            restartBehaviorTimer(5000)
+        } else if (lower.contains("hát") || lower.contains("chào") || lower.contains("hello")) {
+            _emotion.value = PetEmotion.HAPPY
+            playSound(listOf("Xin chào!", "Mình rất vui được gặp bạn"))
+            restartBehaviorTimer(3000)
+        } else if (lower.contains("hư") || lower.contains("phạt") || lower.contains("tệ")) {
+            _emotion.value = PetEmotion.SAD
+            playSound(listOf("Xin lỗi mà", "Tủi thân quá"))
+            restartBehaviorTimer(4000)
+        } else {
+            _emotion.value = PetEmotion.THINKING
+            playSound(listOf("Bạn nói gì bé không hiểu?", "Gì cơ?", "Ngôn ngữ gì lạ thế"))
+            restartBehaviorTimer(4000)
+        }
     }
 
     private fun restartBehaviorTimer(delayMs: Long = 3000) {
